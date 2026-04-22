@@ -13,12 +13,17 @@ struct SessionRowView: View {
         !pendingPermissions.isEmpty || !pendingQuestions.isEmpty
     }
 
+    var isCompleted: Bool {
+        session.currentRequest?.summary != nil
+    }
+
     var body: some View {
         SessionRowCard(
             sessionId: String(session.id.prefix(8)),
             sourceLabel: session.source.label,
             folderName: session.cwd.isEmpty ? nil : (session.cwd as NSString).lastPathComponent,
             isActive: session.isActive,
+            isCompleted: isCompleted,
             hasPending: hasPending,
             pendingPermissionCount: pendingPermissions.count,
             completedTaskCount: session.tasks.filter { $0.status == .completed }.count,
@@ -58,6 +63,7 @@ private struct SessionRowCard: View {
     let sourceLabel: String
     let folderName: String?
     let isActive: Bool
+    let isCompleted: Bool
     let hasPending: Bool
     let pendingPermissionCount: Int
     let completedTaskCount: Int
@@ -104,7 +110,7 @@ private struct SessionRowCard: View {
 
     private var rowLayout: some View {
         HStack(spacing: 10) {
-            StatusDotView(isActive: isActive, hasPending: hasPending)
+            StatusDotView(isActive: isActive, isCompleted: isCompleted, hasPending: hasPending)
             TitleMetaView(
                 sessionId: sessionId,
                 sourceLabel: sourceLabel,
@@ -150,18 +156,29 @@ private struct SessionRowCard: View {
 
 private struct StatusDotView: View {
     let isActive: Bool
+    let isCompleted: Bool
     let hasPending: Bool
+
+    var dotColor: Color {
+        if hasPending {
+            return .orange
+        }
+        if isCompleted {
+            return .purple
+        }
+        if isActive {
+            return .green
+        }
+        return Color(white: 0.4)
+    }
 
     var body: some View {
         ZStack {
             Circle()
-                .fill(isActive ? Color.green : Color.gray)
+                .fill(dotColor)
                 .frame(width: 8, height: 8)
 
             if hasPending {
-                Circle()
-                    .fill(Color.orange)
-                    .frame(width: 8, height: 8)
                 Circle()
                     .stroke(Color.orange, lineWidth: 2)
                     .frame(width: 14, height: 14)

@@ -13,26 +13,30 @@ enum TerminalJumper {
         let sessionAgent = agent ?? session?.source ?? .claude
         let resumeCommand = buildResumeCommand(sessionId: sessionId, cwd: workDir, agent: sessionAgent)
         let searchTerms = buildSearchTerms(sessionId: sessionId, cwd: workDir)
-        NSLog("🔍 搜索词: %@", searchTerms.joined(separator: ", "))
 
         let iTermRunning = NSWorkspace.shared.runningApplications.contains(where: {
             $0.bundleIdentifier == "com.googlecode.iterm2"
         })
-        NSLog("📱 iTerm2 运行中: %@", iTermRunning ? "是" : "否")
 
-        if iTermRunning {
-            if jumpITerm2(searchTerms: searchTerms) {
+        // 在后台线程执行 AppleScript，避免阻塞 UI
+        DispatchQueue.global(qos: .userInitiated).async {
+            NSLog("🔍 搜索词: %@", searchTerms.joined(separator: ", "))
+            NSLog("📱 iTerm2 运行中: %@", iTermRunning ? "是" : "否")
+
+            if iTermRunning {
+                if jumpITerm2(searchTerms: searchTerms) {
+                    return
+                }
+                openInITerm2(command: resumeCommand)
                 return
             }
-            openInITerm2(command: resumeCommand)
-            return
-        }
 
-        NSLog("📺 尝试 Terminal.app")
-        if jumpTerminal(searchTerms: searchTerms) {
-            return
+            NSLog("📺 尝试 Terminal.app")
+            if jumpTerminal(searchTerms: searchTerms) {
+                return
+            }
+            openInTerminal(command: resumeCommand)
         }
-        openInTerminal(command: resumeCommand)
     }
 
     /// 跳转到最近活跃的终端
@@ -42,13 +46,19 @@ enum TerminalJumper {
             $0.bundleIdentifier == "com.googlecode.iterm2"
         })
 
-        if iTermRunning {
-            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.googlecode.iterm2") {
-                NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
-            }
-        } else {
-            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal") {
-                NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+        DispatchQueue.global(qos: .userInitiated).async {
+            if iTermRunning {
+                if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.googlecode.iterm2") {
+                    DispatchQueue.main.async {
+                        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+                    }
+                }
+            } else {
+                if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal") {
+                    DispatchQueue.main.async {
+                        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+                    }
+                }
             }
         }
     }

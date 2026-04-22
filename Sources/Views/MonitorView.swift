@@ -30,9 +30,10 @@ struct MonitorView: View {
     }
 
     var visibleSessions: [Session] {
+        // 按最后更新时间排序，同时显示活跃和最近的会话
         let sorted = monitor.sessions.sorted { $0.lastUpdate > $1.lastUpdate }
-        let active = sorted.filter { $0.isActive }
-        return active.isEmpty ? Array(sorted.prefix(10)) : active
+        // 显示所有活跃会话 + 最近更新的会话（最多显示15个）
+        return Array(sorted.prefix(15))
     }
 
     var body: some View {
@@ -107,7 +108,7 @@ struct MonitorView: View {
             // 底部操作栏
             FooterView(settings: settings, onOpenSettings: onOpenSettings)
         }
-        .frame(width: 380)
+        .frame(width: 480)
         .background(
             LinearGradient(
                 colors: [

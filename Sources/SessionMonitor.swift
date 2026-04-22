@@ -9,10 +9,11 @@ class SessionMonitor: ObservableObject {
 
     private var sessionMap: [String: Session] = [:]
 
-    /// 会话活跃超时时间（秒）- 超过这个时间没有更新就认为不活跃
-    private let activeTimeout: TimeInterval = 120 // 2分钟
+    /// 会话活跃超时时间（秒）- 超过这个时间没有更新才认为不活跃
+    /// 设置较长时间，因为用户可能在思考或等待
+    private let activeTimeout: TimeInterval = 1800 // 30分钟
     /// 会话保留时间（秒）- 超过这个时间的非活跃会话会被清理
-    private let retentionTimeout: TimeInterval = 3600 // 1小时
+    private let retentionTimeout: TimeInterval = 7200 // 2小时
 
     private init() {}
 

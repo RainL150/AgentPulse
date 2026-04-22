@@ -43,7 +43,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 创建浮动面板窗口
         panelWindow = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 380, height: 500),
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 500),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -64,7 +64,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
             .environmentObject(SessionMonitor.shared)
         let hostingView = NSHostingView(rootView: contentView)
-        hostingView.frame = NSRect(x: 0, y: 0, width: 380, height: 500)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 480, height: 500)
 
         panelWindow.contentView = hostingView
         configureIslandWindow()
@@ -301,10 +301,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let y: CGFloat
 
             if shouldExpand {
-                size = NSSize(width: 420, height: 520)
+                size = NSSize(width: 520, height: 520)
                 y = screen.frame.maxY - size.height - 4
             } else {
-                size = NSSize(width: 160, height: 28)
+                size = NSSize(width: 180, height: 28)
                 y = screen.frame.maxY - size.height
             }
 

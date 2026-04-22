@@ -45,6 +45,18 @@ struct IslandView: View {
         !socketServer.pendingPermissions.isEmpty || !socketServer.pendingQuestions.isEmpty
     }
 
+    // 没有匹配到会话的问题
+    private var orphanedQuestions: [AskRequest] {
+        let sessionIds = Set(monitor.sessions.map { $0.id })
+        return socketServer.pendingQuestions.filter { !sessionIds.contains($0.sessionId) }
+    }
+
+    // 没有匹配到会话的权限请求
+    private var orphanedPermissions: [PermissionRequest] {
+        let sessionIds = Set(monitor.sessions.map { $0.id })
+        return socketServer.pendingPermissions.filter { !sessionIds.contains($0.sessionId) }
+    }
+
     private var shouldReveal: Bool {
         overlayState.isHovered || overlayState.isPinnedExpanded || hasAttention
     }
@@ -57,7 +69,7 @@ struct IslandView: View {
         Group {
             if shouldReveal {
                 islandBody
-                    .frame(width: 420, height: 520)
+                    .frame(width: 520, height: 520)
                     .onHover { hovering in
                         overlayState.isHovered = hovering
                     }
@@ -70,7 +82,7 @@ struct IslandView: View {
                         .frame(width: 100, height: 6)
                     Spacer()
                 }
-                .frame(width: 160, height: 28)
+                .frame(width: 180, height: 28)
                 .contentShape(Rectangle())
                 .onHover { hovering in
                     overlayState.isHovered = hovering
@@ -82,7 +94,7 @@ struct IslandView: View {
     private var islandBody: some View {
         currentExpandedContent
             .padding(12)
-            .frame(width: 400)
+            .frame(width: 500)
             .background(backgroundView)
             .overlay(
                 RoundedRectangle(cornerRadius: 20)
@@ -177,15 +189,26 @@ struct IslandView: View {
                 headerActions
             }
 
-            if prioritizedSessions.isEmpty {
-                Text("暂无运行中的会话")
-                    .font(.system(size: 12))
-                    .foregroundColor(.white.opacity(0.62))
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 28)
-            } else {
-                ScrollView(.vertical, showsIndicators: false) {
-                    VStack(spacing: 8) {
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 8) {
+                    // 先显示孤立的问题（没有匹配会话的）
+                    ForEach(orphanedQuestions) { question in
+                        orphanedQuestionCard(question)
+                    }
+
+                    // 再显示孤立的权限请求
+                    ForEach(orphanedPermissions) { permission in
+                        orphanedPermissionCard(permission)
+                    }
+
+                    // 最后显示会话列表
+                    if prioritizedSessions.isEmpty && orphanedQuestions.isEmpty && orphanedPermissions.isEmpty {
+                        Text("暂无运行中的会话")
+                            .font(.system(size: 12))
+                            .foregroundColor(.white.opacity(0.62))
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .padding(.vertical, 28)
+                    } else {
                         ForEach(prioritizedSessions) { session in
                             inlineSessionCard(session, isExpanded: expandedSessionIds.contains(session.id))
                         }
@@ -195,9 +218,98 @@ struct IslandView: View {
         }
     }
 
+    // 孤立问题卡片
+    private func orphanedQuestionCard(_ question: AskRequest) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Image(systemName: "questionmark.bubble.fill")
+                    .foregroundColor(.blue)
+                Text("需要回答")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.blue)
+                Spacer()
+                Text(String(question.sessionId.prefix(8)))
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.5))
+            }
+
+            Text(question.firstQuestion)
+                .font(.system(size: 12))
+                .foregroundColor(.white.opacity(0.9))
+                .fixedSize(horizontal: false, vertical: true)
+
+            // 选项按钮
+            HStack(spacing: 8) {
+                ForEach(question.options, id: \.self) { option in
+                    Button(action: { onAnswer(question.id, option) }) {
+                        Text(option)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color.blue)
+                            .cornerRadius(6)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(12)
+        .background(Color.blue.opacity(0.15))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    // 孤立权限请求卡片
+    private func orphanedPermissionCard(_ permission: PermissionRequest) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Image(systemName: permission.icon)
+                    .foregroundColor(.orange)
+                Text(permission.tool)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.orange)
+                Spacer()
+                Text(String(permission.sessionId.prefix(8)))
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.5))
+            }
+
+            Text(permission.summary)
+                .font(.system(size: 11))
+                .foregroundColor(.white.opacity(0.8))
+
+            HStack(spacing: 8) {
+                Button(action: { onDeny(permission.id) }) {
+                    Text("拒绝")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Color.red)
+                        .cornerRadius(6)
+                }
+                .buttonStyle(.plain)
+
+                Button(action: { onApprove(permission.id) }) {
+                    Text("批准")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Color.green)
+                        .cornerRadius(6)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(12)
+        .background(Color.orange.opacity(0.15))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
     private func inlineSessionCard(_ session: Session, isExpanded: Bool) -> some View {
         let hasSummary = session.currentRequest?.summary != nil
-        let isCompleted = !session.isActive && hasSummary
+        let isCompleted = hasSummary  // 有 AI 总结就是已完成
         // 获取该会话的待处理权限和问题
         let sessionPermissions = socketServer.pendingPermissions.filter { $0.sessionId == session.id }
         let sessionQuestions = socketServer.pendingQuestions.filter { $0.sessionId == session.id }
@@ -205,11 +317,19 @@ struct IslandView: View {
         // 有待处理事项时自动展开
         let shouldExpand = isExpanded || hasAttention
 
+        // 状态颜色：待处理 > 已完成 > 活跃 > 不活跃
+        let dotColor: Color = {
+            if hasAttention { return .orange }
+            if isCompleted { return .purple }
+            if session.isActive { return .green }
+            return Color(white: 0.4)
+        }()
+
         return VStack(alignment: .leading, spacing: 0) {
             // 会话头部（整个区域可点击展开/折叠）
             HStack(spacing: 10) {
                 Circle()
-                    .fill(session.isActive ? Color.green : (isCompleted ? Color.purple : Color.gray))
+                    .fill(dotColor)
                     .frame(width: 8, height: 8)
 
                 VStack(alignment: .leading, spacing: 2) {
@@ -232,7 +352,7 @@ struct IslandView: View {
                         Text(session.currentRequest?.prompt ?? "等待指令")
                             .font(.system(size: 11))
                             .foregroundColor(.white.opacity(0.6))
-                            .lineLimit(1)
+                            .lineLimit(2)
                     }
                 }
 
@@ -293,14 +413,14 @@ struct IslandView: View {
                     .padding(.bottom, 10)
                 } else if let tool = session.currentRequest?.tools.last {
                     // 显示最新工具调用
-                    HStack(spacing: 6) {
+                    HStack(alignment: .top, spacing: 6) {
                         Image(systemName: tool.icon)
                             .font(.system(size: 9))
                             .foregroundColor(toolColor(tool.tool))
-                        Text("\(tool.tool) · \(tool.detail.isEmpty ? tool.fullDetail : tool.detail)")
+                        Text("\(tool.tool) · \(tool.fullDetail)")
                             .font(.system(size: 10))
                             .foregroundColor(.white.opacity(0.5))
-                            .lineLimit(1)
+                            .lineLimit(2)
                     }
                     .padding(.horizontal, 12)
                     .padding(.bottom, 10)
