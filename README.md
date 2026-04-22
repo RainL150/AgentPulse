@@ -1,4 +1,4 @@
-# Claude Monitor
+# AgentPulse
 
 macOS 菜单栏应用，实时监控 Claude Code 执行状态。
 
@@ -19,7 +19,7 @@ Claude Code (hooks)
     │
     ├─ log-tools.sh ──────→ ~/.claude/tool-flow-logs/calls.jsonl
     ├─ generate-summary.js ─→ AI 生成执行总结
-    └─ permission-bridge.js ─→ /tmp/claude-monitor.sock
+    └─ permission-bridge.js ─→ /tmp/agent-pulse.sock
                                     │
                                     ▼
                             Swift 菜单栏 App
@@ -42,10 +42,10 @@ swift build -c release
 
 ```bash
 # 方式 1: 双击 app
-open /Applications/ClaudeMonitor.app
+open /Applications/AgentPulse.app
 
 # 方式 2: 命令行
-.build/release/ClaudeMonitor
+.build/release/AgentPulse
 ```
 
 ## 配置 Hooks
@@ -78,11 +78,11 @@ open /Applications/ClaudeMonitor.app
 ## 文件说明
 
 ```
-ClaudeMonitor/
+AgentPulse/
 ├── Package.swift              # Swift 包定义
 ├── build.sh                   # 构建脚本
-├── ClaudeMonitor/
-│   ├── ClaudeMonitorApp.swift # 应用入口
+├── Sources/
+│   ├── AgentPulseApp.swift    # 应用入口
 │   ├── Models.swift           # 数据模型
 │   ├── SessionMonitor.swift   # 状态管理
 │   ├── Info.plist             # App 配置

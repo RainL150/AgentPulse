@@ -1,9 +1,9 @@
 #!/bin/bash
-# Claude Monitor 构建脚本
+# AgentPulse 构建脚本
 
 set -e
 
-echo "🔨 Building Claude Monitor..."
+echo "🔨 Building AgentPulse..."
 
 cd "$(dirname "$0")"
 
@@ -11,7 +11,7 @@ cd "$(dirname "$0")"
 swift build -c release
 
 # 复制到 Applications
-APP_NAME="ClaudeMonitor"
+APP_NAME="AgentPulse"
 BUILD_DIR=".build/release"
 DEST="/Applications/$APP_NAME.app"
 
@@ -25,7 +25,7 @@ mkdir -p "$DEST/Contents/Resources"
 cp "$BUILD_DIR/$APP_NAME" "$DEST/Contents/MacOS/"
 
 # 复制 Info.plist
-cp "ClaudeMonitor/Info.plist" "$DEST/Contents/"
+cp "Sources/Info.plist" "$DEST/Contents/"
 
 # 创建 PkgInfo
 echo -n "APPL????" > "$DEST/Contents/PkgInfo"
@@ -35,7 +35,7 @@ echo ""
 echo "📍 App location: $DEST"
 echo ""
 echo "🚀 To run:"
-echo "   open /Applications/ClaudeMonitor.app"
+echo "   open /Applications/AgentPulse.app"
 echo ""
 echo "💡 Or run directly:"
 echo "   $BUILD_DIR/$APP_NAME"

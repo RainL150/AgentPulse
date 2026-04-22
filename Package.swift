@@ -10,7 +10,7 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "AgentPulse",
-            path: "ClaudeMonitor"
+            path: "Sources"
         )
     ]
 )

@@ -4,7 +4,7 @@ import Combine
 
 // 注释掉 SwiftUI App，改用 main.swift 入口
 // @main
-// struct ClaudeMonitorApp: App {
+// struct AgentPulseApp: App {
 //     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 //
 //     var body: some Scene {
@@ -21,7 +21,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var settingsWindow: NSWindow!
     var jsonlWatcher: JSONLWatcher?
     var codexWatcher: CodexWatcher?
-    let socketServer = SocketServer(path: "/tmp/claude-monitor.sock")
+    let socketServer = SocketServer(path: "/tmp/agent-pulse.sock")
     let settings = AppSettings.shared
     let islandState = IslandOverlayState()
     private var lastAttentionKey: String?
