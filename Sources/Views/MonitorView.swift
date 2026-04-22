@@ -58,6 +58,9 @@ struct MonitorView: View {
                             onJump: { session in
                                 TerminalJumper.jump(to: session.id, cwd: session.cwd)
                             },
+                            onRemove: { session in
+                                SessionMonitor.shared.removeSession(id: session.id)
+                            },
                             onApprove: { socketServer.respondPermission(requestId: $0, approved: true) },
                             onDeny: { socketServer.respondPermission(requestId: $0, approved: false) },
                             onAnswer: { id, answer in
@@ -126,13 +129,14 @@ struct SessionListSection: View {
     let questionsForSession: (String) -> [AskRequest]
     let onSelect: (Session) -> Void
     let onJump: (Session) -> Void
+    let onRemove: (Session) -> Void
     let onApprove: (String) -> Void
     let onDeny: (String) -> Void
     let onAnswer: (String, String) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("活跃会话")
+            Text("会话")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundColor(.white.opacity(0.65))
                 .padding(.horizontal, 12)
@@ -150,6 +154,9 @@ struct SessionListSection: View {
                         },
                         onJump: {
                             onJump(session)
+                        },
+                        onRemove: {
+                            onRemove(session)
                         }
                     )
 

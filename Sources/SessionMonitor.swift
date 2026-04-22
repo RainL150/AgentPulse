@@ -9,6 +9,11 @@ class SessionMonitor: ObservableObject {
 
     private var sessionMap: [String: Session] = [:]
 
+    /// 会话活跃超时时间（秒）- 超过这个时间没有更新就认为不活跃
+    private let activeTimeout: TimeInterval = 120 // 2分钟
+    /// 会话保留时间（秒）- 超过这个时间的非活跃会话会被清理
+    private let retentionTimeout: TimeInterval = 3600 // 1小时
+
     private init() {}
 
     func handleRecord(_ record: LogRecord) {
@@ -208,10 +213,71 @@ class SessionMonitor: ObservableObject {
         activeCount = sessions.filter { $0.isActive }.count
     }
 
-    // 清理旧会话
+    /// 刷新所有会话的活跃状态（基于最后更新时间）
+    func refreshActiveStates() {
+        let now = Date()
+        var changed = false
+
+        for session in sessions {
+            let timeSinceUpdate = now.timeIntervalSince(session.lastUpdate)
+            let shouldBeActive = timeSinceUpdate < activeTimeout
+
+            if session.isActive != shouldBeActive {
+                session.isActive = shouldBeActive
+                changed = true
+            }
+        }
+
+        if changed {
+            updateActiveCount()
+            objectWillChange.send()
+        }
+    }
+
+    /// 自动清理：移除过期的非活跃会话
+    func autoCleanup() {
+        let now = Date()
+        let initialCount = sessions.count
+
+        // 移除超过保留时间的非活跃会话
+        sessions.removeAll { session in
+            let timeSinceUpdate = now.timeIntervalSince(session.lastUpdate)
+            return !session.isActive && timeSinceUpdate > retentionTimeout
+        }
+
+        // 同步 sessionMap
+        let remainingIds = Set(sessions.map { $0.id })
+        sessionMap = sessionMap.filter { remainingIds.contains($0.key) }
+
+        if sessions.count != initialCount {
+            updateActiveCount()
+            objectWillChange.send()
+        }
+    }
+
+    /// 手动移除指定会话
+    func removeSession(id: String) {
+        sessions.removeAll { $0.id == id }
+        sessionMap.removeValue(forKey: id)
+        updateActiveCount()
+        objectWillChange.send()
+    }
+
+    /// 清理所有非活跃会话
+    func clearInactiveSessions() {
+        sessions.removeAll { !$0.isActive }
+        let remainingIds = Set(sessions.map { $0.id })
+        sessionMap = sessionMap.filter { remainingIds.contains($0.key) }
+        updateActiveCount()
+        objectWillChange.send()
+    }
+
+    // 清理旧会话（保留兼容性）
     func cleanup(olderThan hours: Int = 24) {
         let cutoff = Date().addingTimeInterval(-Double(hours * 3600))
         sessions.removeAll { $0.lastUpdate < cutoff }
         sessionMap = sessionMap.filter { $0.value.lastUpdate >= cutoff }
+        updateActiveCount()
+        objectWillChange.send()
     }
 }

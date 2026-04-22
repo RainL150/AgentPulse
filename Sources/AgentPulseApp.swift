@@ -26,6 +26,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let islandState = IslandOverlayState()
     private var lastAttentionKey: String?
     private var cancellables: Set<AnyCancellable> = []
+    private var settingsWindowObserver: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // 启动 Socket 服务器
@@ -70,9 +71,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         configureSettingsWindow()
         bindIslandState()
 
-        // 监听权限请求变化
+        // 监听权限请求变化 + 刷新会话活跃状态
         Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             self?.refreshUIState()
+        }
+
+        // 定期刷新会话活跃状态（每5秒）
+        Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { _ in
+            SessionMonitor.shared.refreshActiveStates()
+        }
+
+        // 定期自动清理过期会话（每分钟）
+        Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { _ in
+            SessionMonitor.shared.autoCleanup()
         }
 
         Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
@@ -112,9 +123,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func showSettings() {
+        // 移除旧的监听器
+        if let observer = settingsWindowObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+
+        // 监听设置窗口关闭事件，恢复灵动岛
+        settingsWindowObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: settingsWindow,
+            queue: .main
+        ) { [weak self] _ in
+            // 延迟一点恢复灵动岛，避免闪烁
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                self?.lastIslandExpanded = nil // 重置状态，强制重新计算
+                self?.updateIslandPresentation()
+            }
+        }
+
         // 临时隐藏灵动岛避免遮挡
         islandWindow.orderOut(nil)
-        settingsWindow.center()
+
+        // 定位到屏幕中央偏上的位置（更自然）
+        if let screen = NSScreen.main {
+            let screenFrame = screen.visibleFrame
+            let windowFrame = settingsWindow.frame
+            let x = screenFrame.midX - windowFrame.width / 2
+            let y = screenFrame.midY + screenFrame.height * 0.1 // 稍微偏上
+            settingsWindow.setFrameOrigin(NSPoint(x: x, y: y))
+        }
+
         settingsWindow.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }

@@ -7,6 +7,7 @@ struct SessionRowView: View {
     var pendingQuestions: [AskRequest] = []
     var onToggleExpand: (() -> Void)?
     var onJump: (() -> Void)?
+    var onRemove: (() -> Void)?
 
     var hasPending: Bool {
         !pendingPermissions.isEmpty || !pendingQuestions.isEmpty
@@ -23,10 +24,12 @@ struct SessionRowView: View {
             completedTaskCount: session.tasks.filter { $0.status == .completed }.count,
             totalTaskCount: session.tasks.count,
             formattedTime: formatTime(session.lastUpdate),
+            relativeTime: formatRelativeTime(session.lastUpdate),
             isExpanded: isExpanded,
             hasJump: !session.cwd.isEmpty,
             onSelect: { onToggleExpand?() },
-            onJump: { onJump?() }
+            onJump: { onJump?() },
+            onRemove: { onRemove?() }
         )
     }
 
@@ -34,6 +37,19 @@ struct SessionRowView: View {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm"
         return formatter.string(from: date)
+    }
+
+    private func formatRelativeTime(_ date: Date) -> String {
+        let interval = Date().timeIntervalSince(date)
+        if interval < 60 {
+            return "刚刚"
+        } else if interval < 3600 {
+            return "\(Int(interval / 60))分钟前"
+        } else if interval < 86400 {
+            return "\(Int(interval / 3600))小时前"
+        } else {
+            return "\(Int(interval / 86400))天前"
+        }
     }
 }
 
@@ -47,10 +63,12 @@ private struct SessionRowCard: View {
     let completedTaskCount: Int
     let totalTaskCount: Int
     let formattedTime: String
+    let relativeTime: String
     let isExpanded: Bool
     let hasJump: Bool
     let onSelect: () -> Void
     let onJump: () -> Void
+    let onRemove: () -> Void
 
     var body: some View {
         rowLayout
@@ -59,6 +77,18 @@ private struct SessionRowCard: View {
             .background(rowHighlightColor)
             .contentShape(Rectangle())
             .onTapGesture(perform: onSelect)
+            .contextMenu {
+                Button(action: onJump) {
+                    Label("跳转终端", systemImage: "terminal")
+                }
+                .disabled(!hasJump)
+
+                Divider()
+
+                Button(role: .destructive, action: onRemove) {
+                    Label("移除会话", systemImage: "trash")
+                }
+            }
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(cardFillColor)
@@ -83,7 +113,7 @@ private struct SessionRowCard: View {
             )
             Spacer()
             taskArea
-            TimeTextView(formattedTime: formattedTime)
+            TimeTextView(formattedTime: formattedTime, relativeTime: relativeTime)
             jumpArea
             ChevronView(isExpanded: isExpanded)
         }
@@ -199,11 +229,19 @@ private struct TaskPillView: View {
 
 private struct TimeTextView: View {
     let formattedTime: String
+    var relativeTime: String = ""
 
     var body: some View {
-        Text(formattedTime)
-            .font(.system(size: 10))
-            .foregroundColor(.white.opacity(0.5))
+        VStack(alignment: .trailing, spacing: 1) {
+            Text(formattedTime)
+                .font(.system(size: 10))
+                .foregroundColor(.white.opacity(0.5))
+            if !relativeTime.isEmpty && relativeTime != "刚刚" {
+                Text(relativeTime)
+                    .font(.system(size: 8))
+                    .foregroundColor(.white.opacity(0.35))
+            }
+        }
     }
 }
 
