@@ -262,49 +262,96 @@ struct IslandView: View {
     // 孤立权限请求卡片
     private func orphanedPermissionCard(_ permission: PermissionRequest) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
+            // 标题行
+            HStack(spacing: 8) {
                 Image(systemName: permission.icon)
+                    .font(.system(size: 14))
                     .foregroundColor(.orange)
-                Text(permission.tool)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.orange)
+                    .frame(width: 32, height: 32)
+                    .background(Color.orange.opacity(0.15))
+                    .cornerRadius(8)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text("权限申请")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(.orange)
+                        Text(permission.tool)
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundColor(.orange.opacity(0.7))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.orange.opacity(0.1))
+                            .cornerRadius(4)
+                    }
+                    Text(permission.summary)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white)
+                        .lineLimit(2)
+                }
                 Spacer()
                 Text(String(permission.sessionId.prefix(8)))
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.5))
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.4))
             }
 
-            Text(permission.summary)
-                .font(.system(size: 11))
-                .foregroundColor(.white.opacity(0.8))
+            // 详细信息区域
+            if !permission.detail.isEmpty {
+                ScrollView(.vertical, showsIndicators: true) {
+                    Text(permission.detail)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.85))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+                .frame(maxHeight: 120)
+                .padding(10)
+                .background(Color.black.opacity(0.4))
+                .cornerRadius(8)
+            }
 
-            HStack(spacing: 8) {
+            // 操作按钮
+            HStack(spacing: 10) {
                 Button(action: { onDeny(permission.id) }) {
-                    Text("拒绝")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Color.red)
-                        .cornerRadius(6)
+                    HStack(spacing: 4) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 10, weight: .bold))
+                        Text("拒绝")
+                    }
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Color.red.opacity(0.85))
+                    .cornerRadius(8)
                 }
                 .buttonStyle(.plain)
 
                 Button(action: { onApprove(permission.id) }) {
-                    Text("批准")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Color.green)
-                        .cornerRadius(6)
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 10, weight: .bold))
+                        Text("批准")
+                    }
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Color.green.opacity(0.85))
+                    .cornerRadius(8)
                 }
                 .buttonStyle(.plain)
+
+                Spacer()
             }
         }
         .padding(12)
-        .background(Color.orange.opacity(0.15))
+        .background(Color.orange.opacity(0.12))
         .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.orange.opacity(0.4), lineWidth: 1)
+        )
     }
 
     private func inlineSessionCard(_ session: Session, isExpanded: Bool) -> some View {
@@ -1138,19 +1185,29 @@ struct IslandView: View {
 
     // MARK: - 内嵌权限卡片
     private func inlinePermissionCard(_ permission: PermissionRequest) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
+            // 标题行
             HStack(spacing: 8) {
                 Image(systemName: permission.icon)
-                    .font(.system(size: 12))
+                    .font(.system(size: 14))
                     .foregroundColor(.orange)
-                    .frame(width: 28, height: 28)
+                    .frame(width: 32, height: 32)
                     .background(Color.orange.opacity(0.15))
-                    .cornerRadius(6)
+                    .cornerRadius(8)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("权限申请")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(.orange)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text("权限申请")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(.orange)
+                        Text(permission.tool)
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundColor(.orange.opacity(0.7))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.orange.opacity(0.1))
+                            .cornerRadius(4)
+                    }
                     Text(permission.summary)
                         .font(.system(size: 12, weight: .medium))
                         .foregroundColor(.white)
@@ -1159,49 +1216,62 @@ struct IslandView: View {
                 Spacer()
             }
 
+            // 详细信息区域（可滚动）
             if !permission.detail.isEmpty {
-                Text(permission.detail)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.7))
-                    .lineLimit(3)
-                    .padding(8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.black.opacity(0.3))
-                    .cornerRadius(6)
+                ScrollView(.vertical, showsIndicators: true) {
+                    Text(permission.detail)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.85))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+                .frame(maxHeight: 120)
+                .padding(10)
+                .background(Color.black.opacity(0.4))
+                .cornerRadius(8)
             }
 
-            HStack(spacing: 8) {
+            // 操作按钮
+            HStack(spacing: 10) {
                 Button(action: { onDeny(permission.id) }) {
-                    Text("拒绝")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 6)
-                        .background(Color.red.opacity(0.8))
-                        .cornerRadius(6)
+                    HStack(spacing: 4) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 10, weight: .bold))
+                        Text("拒绝")
+                    }
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Color.red.opacity(0.85))
+                    .cornerRadius(8)
                 }
                 .buttonStyle(.plain)
 
                 Button(action: { onApprove(permission.id) }) {
-                    Text("批准")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 6)
-                        .background(Color.green.opacity(0.8))
-                        .cornerRadius(6)
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 10, weight: .bold))
+                        Text("批准")
+                    }
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Color.green.opacity(0.85))
+                    .cornerRadius(8)
                 }
                 .buttonStyle(.plain)
 
                 Spacer()
             }
         }
-        .padding(10)
-        .background(Color.orange.opacity(0.1))
-        .cornerRadius(8)
+        .padding(12)
+        .background(Color.orange.opacity(0.12))
+        .cornerRadius(10)
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.orange.opacity(0.3), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.orange.opacity(0.4), lineWidth: 1)
         )
     }
 
