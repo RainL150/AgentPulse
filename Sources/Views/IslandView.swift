@@ -672,9 +672,9 @@ struct IslandView: View {
             }
 
             if isToolExpanded {
-                // 展开显示详细列表
+                // 展开显示详细列表（最新的在最上面）
                 VStack(alignment: .leading, spacing: 4) {
-                    ForEach(tools.suffix(10)) { tool in
+                    ForEach(tools.suffix(10).reversed()) { tool in
                         HStack(spacing: 6) {
                             Image(systemName: tool.icon)
                                 .font(.system(size: 10))
@@ -697,10 +697,10 @@ struct IslandView: View {
                     }
                 }
             } else {
-                // 折叠显示图标流（使用 description 作为描述）
+                // 折叠显示图标流（最新的在最左边）
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
-                        ForEach(Array(tools.suffix(6).enumerated()), id: \.element.id) { index, tool in
+                        ForEach(Array(tools.suffix(6).reversed().enumerated()), id: \.element.id) { index, tool in
                             if index > 0 {
                                 Image(systemName: "arrow.right")
                                     .font(.system(size: 8))
@@ -811,7 +811,7 @@ struct IslandView: View {
 
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 6) {
-                            ForEach(Array(tools.suffix(8).enumerated()), id: \.element.id) { index, tool in
+                            ForEach(Array(tools.suffix(8).reversed().enumerated()), id: \.element.id) { index, tool in
                                 if index > 0 {
                                     Image(systemName: "arrow.right")
                                         .font(.system(size: 9))
