@@ -84,7 +84,7 @@ struct IslandView: View {
                         overlayState.isHovered = hovering
                     }
             } else {
-                // 收起状态：小胶囊
+                // 收起状态：小胶囊（增大hover区域防止抖动）
                 HStack {
                     Spacer()
                     Capsule()
@@ -92,10 +92,21 @@ struct IslandView: View {
                         .frame(width: 100, height: 6)
                     Spacer()
                 }
-                .frame(width: 180, height: 28)
+                .frame(width: 280, height: 50)  // 增大hover区域
                 .contentShape(Rectangle())
                 .onHover { hovering in
-                    overlayState.isHovered = hovering
+                    // 添加防抖动延迟
+                    if hovering {
+                        overlayState.isHovered = true
+                    } else {
+                        // 延迟收起，给鼠标移动到展开区域的时间
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                            // 检查是否有待处理事项，如果有则保持展开
+                            if !hasAttention {
+                                overlayState.isHovered = false
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -184,9 +195,9 @@ struct IslandView: View {
             .onHover { hovering in
                 overlayState.isHovered = hovering
                 if !hovering && !hasAttention && !overlayState.isPinnedExpanded {
-                    // 延迟一点再收起，避免闪烁
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        if !overlayState.isHovered {
+                    // 延迟收起，避免抖动
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        if !overlayState.isHovered && !hasAttention {
                             overlayState.showOverview(expanded: false)
                         }
                     }
