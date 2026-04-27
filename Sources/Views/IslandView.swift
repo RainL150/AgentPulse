@@ -14,6 +14,7 @@ struct IslandView: View {
 
     @State private var expandedSessionIds: Set<String> = []
     @State private var expandedToolFlowIds: Set<String> = []
+    @State private var collapseWorkItem: DispatchWorkItem?
 
     private var currentPermission: PermissionRequest? {
         if let focusedId = overlayState.focusedPermissionId {
@@ -80,9 +81,6 @@ struct IslandView: View {
             } else if shouldReveal {
                 islandBody
                     .frame(width: 520, height: 520)
-                    .onHover { hovering in
-                        overlayState.isHovered = hovering
-                    }
             } else {
                 // 收起状态：小胶囊（增大hover区域防止抖动）
                 HStack {
@@ -95,16 +93,23 @@ struct IslandView: View {
                 .frame(width: 280, height: 50)  // 增大hover区域
                 .contentShape(Rectangle())
                 .onHover { hovering in
-                    // 添加防抖动延迟
                     if hovering {
+                        // 鼠标进入：立即取消收起操作
+                        collapseWorkItem?.cancel()
+                        collapseWorkItem = nil
                         overlayState.isHovered = true
                     } else {
-                        // 延迟收起，给鼠标移动到展开区域的时间
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                            // 检查是否有待处理事项，如果有则保持展开
-                            if !hasAttention {
-                                overlayState.isHovered = false
+                        // 鼠标离开：延迟收起，给鼠标移动到展开区域的时间
+                        if !hasAttention {
+                            collapseWorkItem?.cancel()
+                            let workItem = DispatchWorkItem { [weak overlayState] in
+                                guard let overlayState = overlayState else { return }
+                                if !overlayState.isHovered {
+                                    overlayState.isHovered = false
+                                }
                             }
+                            collapseWorkItem = workItem
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: workItem)
                         }
                     }
                 }
@@ -193,13 +198,24 @@ struct IslandView: View {
             .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
             .shadow(color: Color.black.opacity(0.34), radius: 28, x: 0, y: 12)
             .onHover { hovering in
-                overlayState.isHovered = hovering
-                if !hovering && !hasAttention && !overlayState.isPinnedExpanded {
-                    // 延迟收起，避免抖动
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                        if !overlayState.isHovered && !hasAttention {
-                            overlayState.showOverview(expanded: false)
+                if hovering {
+                    // 鼠标进入：立即取消收起操作，保持展开
+                    collapseWorkItem?.cancel()
+                    collapseWorkItem = nil
+                    overlayState.isHovered = true
+                } else {
+                    // 鼠标离开：延迟收起，避免闪烁
+                    overlayState.isHovered = false
+                    if !hasAttention && !overlayState.isPinnedExpanded {
+                        collapseWorkItem?.cancel()
+                        let workItem = DispatchWorkItem { [weak overlayState] in
+                            guard let overlayState = overlayState else { return }
+                            if !overlayState.isHovered && !overlayState.isPinnedExpanded {
+                                overlayState.showOverview(expanded: false)
+                            }
                         }
+                        collapseWorkItem = workItem
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: workItem)
                     }
                 }
             }
