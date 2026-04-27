@@ -1,6 +1,7 @@
 import Foundation
 
 /// Unix Socket 服务器，用于接收权限请求和问答请求
+/// 优化版本：事件驱动监听 + 双写保护，实现零延迟竞速模式
 class SocketServer: ObservableObject {
     private let path: String
     private var serverSocket: Int32 = -1
@@ -15,6 +16,14 @@ class SocketServer: ObservableObject {
     private var permissionFds: [String: Int32] = [:]
     private var questionFds: [String: Int32] = [:]
 
+    // 双写保护：已处理的请求ID集合
+    private var handledRequests: Set<String> = []
+    private let handledQueue = DispatchQueue(label: "socket.handled", qos: .userInitiated)
+
+    // DispatchSource 监听socket事件（事件驱动，零延迟检测）
+    private var permissionSources: [String: DispatchSourceRead] = [:]
+    private var questionSources: [String: DispatchSourceRead] = [:]
+
     var onPermissionRequest: ((PermissionRequest) -> Void)?
     var onAskRequest: ((AskRequest) -> Void)?
 
@@ -23,90 +32,32 @@ class SocketServer: ObservableObject {
     }
 
     func start() {
-        guard !isRunning else { return } // 防止重复启动
+        guard !isRunning else { return }
         serverQueue.async { [weak self] in
             self?.runServer()
         }
-        // 定期清理已关闭的连接
-        startCleanupTimer()
-    }
-
-    private func startCleanupTimer() {
-        DispatchQueue.main.async {
-            // 每 0.5 秒检查一次，更及时地检测终端中的选择
-            Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-                self?.cleanupStaleRequests()
-            }
-        }
-    }
-
-    private func cleanupStaleRequests() {
-        responseQueue.async { [weak self] in
-            guard let self = self else { return }
-
-            var stalePermissionIds: [String] = []
-            var staleQuestionIds: [String] = []
-
-            // 检查权限请求的 socket 是否还有效
-            for (id, fd) in self.permissionFds {
-                if self.isSocketClosed(fd) {
-                    stalePermissionIds.append(id)
-                    close(fd)
-                }
-            }
-
-            // 检查提问请求的 socket 是否还有效
-            for (id, fd) in self.questionFds {
-                if self.isSocketClosed(fd) {
-                    staleQuestionIds.append(id)
-                    close(fd)
-                }
-            }
-
-            // 清理失效的请求
-            for id in stalePermissionIds {
-                self.permissionFds.removeValue(forKey: id)
-            }
-            for id in staleQuestionIds {
-                self.questionFds.removeValue(forKey: id)
-            }
-
-            if !stalePermissionIds.isEmpty || !staleQuestionIds.isEmpty {
-                DispatchQueue.main.async {
-                    self.pendingPermissions.removeAll { stalePermissionIds.contains($0.id) }
-                    self.pendingQuestions.removeAll { staleQuestionIds.contains($0.id) }
-                    NSLog("🧹 清理了 %d 个过期权限请求和 %d 个过期问题（终端已处理）",
-                          stalePermissionIds.count, staleQuestionIds.count)
-                }
-            }
-        }
-    }
-
-    /// 使用 poll 检测 socket 是否已关闭
-    private func isSocketClosed(_ fd: Int32) -> Bool {
-        var pfd = pollfd(fd: fd, events: Int16(POLLIN | POLLHUP | POLLERR), revents: 0)
-        let result = poll(&pfd, 1, 0) // 非阻塞检查
-
-        if result > 0 {
-            // 检查是否有挂断或错误事件
-            if (pfd.revents & Int16(POLLHUP)) != 0 || (pfd.revents & Int16(POLLERR)) != 0 {
-                return true
-            }
-            // 如果可读，尝试 peek 检测是否是 EOF
-            if (pfd.revents & Int16(POLLIN)) != 0 {
-                var buf: CChar = 0
-                let n = recv(fd, &buf, 1, MSG_PEEK | MSG_DONTWAIT)
-                if n == 0 {
-                    // EOF - 对端已关闭
-                    return true
-                }
-            }
-        }
-        return false
+        NSLog("🚀 SocketServer 启动完成（事件驱动模式）")
     }
 
     func stop() {
         isRunning = false
+
+        // 取消所有DispatchSource
+        for (_, source) in permissionSources {
+            source.cancel()
+        }
+        for (_, source) in questionSources {
+            source.cancel()
+        }
+
+        // 关闭所有fd
+        for (_, fd) in permissionFds {
+            close(fd)
+        }
+        for (_, fd) in questionFds {
+            close(fd)
+        }
+
         if serverSocket >= 0 {
             close(serverSocket)
             serverSocket = -1
@@ -116,32 +67,33 @@ class SocketServer: ObservableObject {
 
     // MARK: - 清除会话的所有待处理请求
 
-    /// 当会话被中断时，清除该会话的所有待处理请求
     func clearRequestsForSession(_ sessionId: String) {
         responseQueue.async { [weak self] in
             guard let self = self else { return }
 
-            // 找出该会话的所有权限请求
             let permissionIds = self.pendingPermissions
                 .filter { $0.sessionId == sessionId }
                 .map { $0.id }
 
-            // 找出该会话的所有问题请求
             let questionIds = self.pendingQuestions
                 .filter { $0.sessionId == sessionId }
                 .map { $0.id }
 
-            // 关闭并清理权限请求的 socket
+            // 关闭并清理权限请求
             for id in permissionIds {
                 if let fd = self.permissionFds[id] {
+                    self.permissionSources[id]?.cancel()
+                    self.permissionSources.removeValue(forKey: id)
                     close(fd)
                     self.permissionFds.removeValue(forKey: id)
                 }
             }
 
-            // 关闭并清理问题请求的 socket
+            // 关闭并清理问题请求
             for id in questionIds {
                 if let fd = self.questionFds[id] {
+                    self.questionSources[id]?.cancel()
+                    self.questionSources.removeValue(forKey: id)
                     close(fd)
                     self.questionFds.removeValue(forKey: id)
                 }
@@ -162,8 +114,29 @@ class SocketServer: ObservableObject {
     func respondPermission(requestId: String, approved: Bool, reason: String? = nil) {
         responseQueue.async { [weak self] in
             guard let self = self else { return }
+
+            // 双写保护：检查是否已处理
+            let alreadyHandled = self.handledQueue.sync { () -> Bool in
+                if self.handledRequests.contains(requestId) {
+                    return true
+                }
+                self.handledRequests.insert(requestId)
+                return false
+            }
+
+            if alreadyHandled {
+                NSLog("⚠️ 权限请求 %@ 已被处理，跳过重复响应", requestId)
+                DispatchQueue.main.async {
+                    self.pendingPermissions.removeAll { $0.id == requestId }
+                }
+                return
+            }
+
             guard let fd = self.permissionFds[requestId] else {
-                print("[Socket] No FD found for: \(requestId)")
+                NSLog("⚠️ 权限请求 %@ 的socket已关闭（可能终端已响应）", requestId)
+                DispatchQueue.main.async {
+                    self.pendingPermissions.removeAll { $0.id == requestId }
+                }
                 return
             }
 
@@ -182,11 +155,15 @@ class SocketServer: ObservableObject {
                 }
             }
 
+            // 取消监听并关闭
+            self.permissionSources[requestId]?.cancel()
+            self.permissionSources.removeValue(forKey: requestId)
             close(fd)
             self.permissionFds.removeValue(forKey: requestId)
 
             DispatchQueue.main.async {
                 self.pendingPermissions.removeAll { $0.id == requestId }
+                NSLog("✅ 灵动岛响应权限请求: %@ (%@)", requestId, approved ? "批准" : "拒绝")
             }
         }
     }
@@ -195,7 +172,32 @@ class SocketServer: ObservableObject {
 
     func respondQuestion(requestId: String, answer: String) {
         responseQueue.async { [weak self] in
-            guard let fd = self?.questionFds[requestId] else { return }
+            guard let self = self else { return }
+
+            // 双写保护：检查是否已处理
+            let alreadyHandled = self.handledQueue.sync { () -> Bool in
+                if self.handledRequests.contains(requestId) {
+                    return true
+                }
+                self.handledRequests.insert(requestId)
+                return false
+            }
+
+            if alreadyHandled {
+                NSLog("⚠️ 问答请求 %@ 已被处理，跳过重复响应", requestId)
+                DispatchQueue.main.async {
+                    self.pendingQuestions.removeAll { $0.id == requestId }
+                }
+                return
+            }
+
+            guard let fd = self.questionFds[requestId] else {
+                NSLog("⚠️ 问答请求 %@ 的socket已关闭（可能终端已响应）", requestId)
+                DispatchQueue.main.async {
+                    self.pendingQuestions.removeAll { $0.id == requestId }
+                }
+                return
+            }
 
             let response: [String: Any] = [
                 "answer": answer,
@@ -209,11 +211,93 @@ class SocketServer: ObservableObject {
                 }
             }
 
+            // 取消监听并关闭
+            self.questionSources[requestId]?.cancel()
+            self.questionSources.removeValue(forKey: requestId)
             close(fd)
-            self?.questionFds.removeValue(forKey: requestId)
+            self.questionFds.removeValue(forKey: requestId)
 
             DispatchQueue.main.async {
+                self.pendingQuestions.removeAll { $0.id == requestId }
+                NSLog("✅ 灵动岛响应问答请求: %@ = %@", requestId, answer)
+            }
+        }
+    }
+
+    // MARK: - 事件驱动Socket监听（核心优化）
+
+    /// 为fd创建DispatchSource，监听socket事件，实现零延迟检测
+    private func setupEventSource(fd: Int32, requestId: String, isPermission: Bool) {
+        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: responseQueue)
+
+        source.setEventHandler { [weak self] in
+            guard let self = self else { return }
+
+            // 检测socket状态
+            var buf: CChar = 0
+            let n = recv(fd, &buf, 1, MSG_PEEK | MSG_DONTWAIT)
+
+            if n == 0 {
+                // EOF - socket已关闭（终端已响应）
+                NSLog("🔔 检测到终端响应: %@ (socket EOF)", requestId)
+                self.handleTerminalResponse(requestId: requestId, isPermission: isPermission)
+            } else if n < 0 && (errno == ECONNRESET || errno == EPIPE) {
+                // 连接重置
+                NSLog("🔔 检测到终端响应: %@ (socket reset)", requestId)
+                self.handleTerminalResponse(requestId: requestId, isPermission: isPermission)
+            }
+        }
+
+        source.setCancelHandler {
+            // source被取消时的清理
+        }
+
+        source.resume()
+
+        // 保存source引用
+        if isPermission {
+            permissionSources[requestId] = source
+        } else {
+            questionSources[requestId] = source
+        }
+
+        NSLog("📡 启动事件监听: %@ (fd=%d)", requestId, fd)
+    }
+
+    /// 处理终端响应（socket关闭事件）
+    private func handleTerminalResponse(requestId: String, isPermission: Bool) {
+        // 双写保护：标记为已处理
+        handledQueue.sync {
+            _ = handledRequests.insert(requestId)
+        }
+
+        if isPermission {
+            if let source = permissionSources[requestId] {
+                source.cancel()
+                permissionSources.removeValue(forKey: requestId)
+            }
+            if let fd = permissionFds[requestId] {
+                close(fd)
+                permissionFds.removeValue(forKey: requestId)
+            }
+
+            DispatchQueue.main.async { [weak self] in
+                self?.pendingPermissions.removeAll { $0.id == requestId }
+                NSLog("✅ 终端响应权限请求: %@", requestId)
+            }
+        } else {
+            if let source = questionSources[requestId] {
+                source.cancel()
+                questionSources.removeValue(forKey: requestId)
+            }
+            if let fd = questionFds[requestId] {
+                close(fd)
+                questionFds.removeValue(forKey: requestId)
+            }
+
+            DispatchQueue.main.async { [weak self] in
                 self?.pendingQuestions.removeAll { $0.id == requestId }
+                NSLog("✅ 终端响应问答请求: %@", requestId)
             }
         }
     }
@@ -291,7 +375,7 @@ class SocketServer: ObservableObject {
             let tool = json["tool"] as? String ?? ""
             let inputData = json["input"] as? [String: Any] ?? [:]
 
-            // AskUserQuestion 应该作为提问处理，不是权限申请
+            // AskUserQuestion 应该作为提问处理
             if tool == "AskUserQuestion" {
                 let questions = inputData["questions"] as? [[String: Any]] ?? []
                 let request = AskRequest(
@@ -301,6 +385,8 @@ class SocketServer: ObservableObject {
                     timestamp: Date()
                 )
                 questionFds[request.id] = fd
+                setupEventSource(fd: fd, requestId: request.id, isPermission: false)
+
                 DispatchQueue.main.async { [weak self] in
                     self?.pendingQuestions.append(request)
                     self?.onAskRequest?(request)
@@ -308,7 +394,7 @@ class SocketServer: ObservableObject {
                 return
             }
 
-            // 使用 session_id + tool + input hash 来去重
+            // 去重
             let inputHash = (try? JSONSerialization.data(withJSONObject: inputData))?.hashValue ?? 0
             let dedupeKey = "\(sessionId)-\(tool)-\(inputHash)"
 
@@ -320,13 +406,13 @@ class SocketServer: ObservableObject {
                 timestamp: Date()
             )
 
-            // 检查是否已存在相同请求
             if permissionFds[request.id] != nil {
                 close(fd)
                 return
             }
 
             permissionFds[request.id] = fd
+            setupEventSource(fd: fd, requestId: request.id, isPermission: true)
 
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
@@ -338,8 +424,6 @@ class SocketServer: ObservableObject {
 
         case "ask":
             let questions = json["questions"] as? [[String: Any]] ?? []
-            NSLog("📥 收到 ask 请求, questions: %d", questions.count)
-
             let request = AskRequest(
                 id: UUID().uuidString,
                 sessionId: json["session_id"] as? String ?? "",
@@ -347,13 +431,11 @@ class SocketServer: ObservableObject {
                 timestamp: Date()
             )
 
-            NSLog("📥 AskRequest firstQuestion: %@, options: %@", request.firstQuestion, request.options.joined(separator: ", "))
-
             questionFds[request.id] = fd
+            setupEventSource(fd: fd, requestId: request.id, isPermission: false)
 
             DispatchQueue.main.async { [weak self] in
                 self?.pendingQuestions.append(request)
-                NSLog("📥 pendingQuestions count: %d", self?.pendingQuestions.count ?? 0)
                 self?.onAskRequest?(request)
             }
 
