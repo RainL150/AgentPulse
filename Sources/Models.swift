@@ -205,6 +205,12 @@ struct ToolCall: Identifiable {
                 return "#\(taskId) → \(status)"
             }
         case "AskUserQuestion":
+            // 提取并显示问题内容
+            if let questions = input["questions"] as? [[String: Any]],
+               let firstQ = questions.first,
+               let question = firstQ["question"] as? String {
+                return "❓ \(question)"
+            }
             return "等待用户回答..."
         case "Task":
             // 显示子代理类型和描述
