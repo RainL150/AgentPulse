@@ -22,7 +22,7 @@ struct SessionRowView: View {
             sessionId: String(session.id.prefix(8)),
             sourceLabel: session.source.label,
             folderName: session.cwd.isEmpty ? nil : (session.cwd as NSString).lastPathComponent,
-            isActive: session.isActive,
+            sessionState: session.state,
             isCompleted: isCompleted,
             hasPending: hasPending,
             pendingPermissionCount: pendingPermissions.count,
@@ -62,7 +62,7 @@ private struct SessionRowCard: View {
     let sessionId: String
     let sourceLabel: String
     let folderName: String?
-    let isActive: Bool
+    let sessionState: SessionState
     let isCompleted: Bool
     let hasPending: Bool
     let pendingPermissionCount: Int
@@ -110,11 +110,12 @@ private struct SessionRowCard: View {
 
     private var rowLayout: some View {
         HStack(spacing: 10) {
-            StatusDotView(isActive: isActive, isCompleted: isCompleted, hasPending: hasPending)
+            StatusDotView(sessionState: sessionState, isCompleted: isCompleted, hasPending: hasPending)
             TitleMetaView(
                 sessionId: sessionId,
                 sourceLabel: sourceLabel,
                 folderName: folderName,
+                sessionState: sessionState,
                 pendingPermissionCount: pendingPermissionCount
             )
             Spacer()
@@ -141,8 +142,11 @@ private struct SessionRowCard: View {
 
     private var rowHighlightColor: Color {
         if hasPending { return Color.orange.opacity(0.1) }
-        if isActive { return Color.green.opacity(0.05) }
-        return .clear
+        switch sessionState {
+        case .running: return Color.green.opacity(0.05)
+        case .idle: return Color.yellow.opacity(0.03)
+        case .stopped, .expired: return .clear
+        }
     }
 
     private var cardFillColor: Color {
@@ -155,7 +159,7 @@ private struct SessionRowCard: View {
 }
 
 private struct StatusDotView: View {
-    let isActive: Bool
+    let sessionState: SessionState
     let isCompleted: Bool
     let hasPending: Bool
 
@@ -166,10 +170,22 @@ private struct StatusDotView: View {
         if isCompleted {
             return .purple
         }
-        if isActive {
-            return .green
+        switch sessionState {
+        case .running: return .green
+        case .idle: return .yellow
+        case .stopped: return Color(white: 0.5)
+        case .expired: return Color(white: 0.3)
         }
-        return Color(white: 0.4)
+    }
+
+    var dotIcon: String? {
+        if hasPending || isCompleted { return nil }
+        switch sessionState {
+        case .running: return nil
+        case .idle: return "pause.fill"
+        case .stopped: return "stop.fill"
+        case .expired: return "xmark"
+        }
     }
 
     var body: some View {
@@ -184,6 +200,12 @@ private struct StatusDotView: View {
                     .frame(width: 14, height: 14)
                     .opacity(0.5)
             }
+
+            if let icon = dotIcon {
+                Image(systemName: icon)
+                    .font(.system(size: 5, weight: .bold))
+                    .foregroundColor(.white.opacity(0.8))
+            }
         }
     }
 }
@@ -192,7 +214,17 @@ private struct TitleMetaView: View {
     let sessionId: String
     let sourceLabel: String
     let folderName: String?
+    let sessionState: SessionState
     let pendingPermissionCount: Int
+
+    var stateColor: Color {
+        switch sessionState {
+        case .running: return .green
+        case .idle: return .yellow
+        case .stopped: return Color(white: 0.5)
+        case .expired: return Color(white: 0.4)
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -208,6 +240,17 @@ private struct TitleMetaView: View {
                     .padding(.vertical, 2)
                     .background(Color.white.opacity(0.08))
                     .cornerRadius(4)
+
+                // 非运行状态显示状态标签
+                if sessionState != .running {
+                    Text(sessionState.label)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundColor(stateColor)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(stateColor.opacity(0.15))
+                        .cornerRadius(4)
+                }
 
                 if pendingPermissionCount > 0 {
                     Text("\(pendingPermissionCount) 待审批")

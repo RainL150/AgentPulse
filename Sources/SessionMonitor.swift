@@ -9,11 +9,16 @@ class SessionMonitor: ObservableObject {
 
     private var sessionMap: [String: Session] = [:]
 
-    /// 会话活跃超时时间（秒）- 超过这个时间没有更新才认为不活跃
-    /// 设置较长时间，因为用户可能在思考或等待
-    private let activeTimeout: TimeInterval = 1800 // 30分钟
-    /// 会话保留时间（秒）- 超过这个时间的非活跃会话会被清理
-    private let retentionTimeout: TimeInterval = 7200 // 2小时
+    /// 会话变为 idle 的超时时间（秒）
+    private let idleTimeout: TimeInterval = 300 // 5分钟无活动变为 idle
+    /// 会话变为 expired 的超时时间（秒）
+    private let expiredTimeout: TimeInterval = 7200 // 2小时后过期
+
+    /// 会话被中断时的回调（用于清除待处理的权限/问题请求）
+    var onSessionStopped: ((String) -> Void)?
+
+    /// 会话完成时的回调（收到 summary）
+    var onSessionCompleted: ((Session, String) -> Void)?
 
     private init() {}
 
@@ -29,7 +34,7 @@ class SessionMonitor: ObservableObject {
             if let prompt = record.prompt {
                 let request = UserRequest(prompt: prompt, time: record.timestamp)
                 session.requests.append(request)
-                session.isActive = true
+                session.state = .running
             }
 
         case "tool":
@@ -66,11 +71,15 @@ class SessionMonitor: ObservableObject {
                 } else {
                     session.currentRequest?.summary = summary
                 }
+                // 通知会话完成
+                onSessionCompleted?(session, summary.result)
             }
 
         case "stop":
-            // 会话暂停
-            session.isActive = false
+            // 会话主动中断
+            session.state = .stopped
+            // 通知清除该会话的待处理请求
+            onSessionStopped?(record.sessionId)
 
         default:
             break
@@ -87,7 +96,7 @@ class SessionMonitor: ObservableObject {
         if !cwd.isEmpty {
             session.cwd = cwd
         }
-        session.isActive = isRecentExternalActivity(session.lastUpdate)
+        session.state = stateForExternalActivity(session.lastUpdate)
         updateActiveCount()
         objectWillChange.send()
     }
@@ -103,7 +112,7 @@ class SessionMonitor: ObservableObject {
             let request = UserRequest(prompt: prompt, time: time)
             session.requests.append(request)
         }
-        session.isActive = isRecentExternalActivity(session.lastUpdate)
+        session.state = .running  // 有新 prompt 说明正在运行
         updateActiveCount()
         objectWillChange.send()
     }
@@ -119,7 +128,7 @@ class SessionMonitor: ObservableObject {
             session.requests.append(UserRequest(prompt: source == .codex ? "Codex 会话" : "外部会话", time: time))
         }
         session.requests[session.requests.count - 1].tools.append(toolCall)
-        session.isActive = isRecentExternalActivity(session.lastUpdate)
+        session.state = .running  // 有工具调用说明正在运行
         updateActiveCount()
         objectWillChange.send()
     }
@@ -139,7 +148,7 @@ class SessionMonitor: ObservableObject {
                 activeForm: nil
             )
         }
-        session.isActive = isRecentExternalActivity(session.lastUpdate)
+        session.state = .running  // 有任务更新说明正在运行
         updateActiveCount()
         objectWillChange.send()
     }
@@ -155,13 +164,21 @@ class SessionMonitor: ObservableObject {
             session.requests.append(UserRequest(prompt: source == .codex ? "Codex 会话" : "外部会话", time: time))
         }
         session.requests[session.requests.count - 1].summary = Summary(raw: summaryText)
-        session.isActive = isRecentExternalActivity(session.lastUpdate)
+        session.state = stateForExternalActivity(session.lastUpdate)
         updateActiveCount()
         objectWillChange.send()
     }
 
-    private func isRecentExternalActivity(_ date: Date) -> Bool {
-        Date().timeIntervalSince(date) < 45 * 60
+    /// 根据时间判断外部会话的状态
+    private func stateForExternalActivity(_ date: Date) -> SessionState {
+        let elapsed = Date().timeIntervalSince(date)
+        if elapsed < idleTimeout {
+            return .running
+        } else if elapsed < expiredTimeout {
+            return .idle
+        } else {
+            return .expired
+        }
     }
 
     private func taskStatus(from value: String) -> TaskStatus {
@@ -211,20 +228,32 @@ class SessionMonitor: ObservableObject {
     }
 
     private func updateActiveCount() {
-        activeCount = sessions.filter { $0.isActive }.count
+        activeCount = sessions.filter { $0.state == .running }.count
     }
 
-    /// 刷新所有会话的活跃状态（基于最后更新时间）
+    /// 刷新所有会话的状态（基于最后更新时间）
     func refreshActiveStates() {
         let now = Date()
         var changed = false
 
         for session in sessions {
-            let timeSinceUpdate = now.timeIntervalSince(session.lastUpdate)
-            let shouldBeActive = timeSinceUpdate < activeTimeout
+            // 已经是 stopped 的会话不自动改变状态（用户主动中断）
+            if session.state == .stopped {
+                continue
+            }
 
-            if session.isActive != shouldBeActive {
-                session.isActive = shouldBeActive
+            let timeSinceUpdate = now.timeIntervalSince(session.lastUpdate)
+            let newState: SessionState
+            if timeSinceUpdate < idleTimeout {
+                newState = .running
+            } else if timeSinceUpdate < expiredTimeout {
+                newState = .idle
+            } else {
+                newState = .expired
+            }
+
+            if session.state != newState {
+                session.state = newState
                 changed = true
             }
         }
@@ -235,16 +264,12 @@ class SessionMonitor: ObservableObject {
         }
     }
 
-    /// 自动清理：移除过期的非活跃会话
+    /// 自动清理：移除过期的会话
     func autoCleanup() {
-        let now = Date()
         let initialCount = sessions.count
 
-        // 移除超过保留时间的非活跃会话
-        sessions.removeAll { session in
-            let timeSinceUpdate = now.timeIntervalSince(session.lastUpdate)
-            return !session.isActive && timeSinceUpdate > retentionTimeout
-        }
+        // 移除 expired 状态的会话
+        sessions.removeAll { $0.state == .expired }
 
         // 同步 sessionMap
         let remainingIds = Set(sessions.map { $0.id })
@@ -264,9 +289,9 @@ class SessionMonitor: ObservableObject {
         objectWillChange.send()
     }
 
-    /// 清理所有非活跃会话
+    /// 清理所有非运行中的会话
     func clearInactiveSessions() {
-        sessions.removeAll { !$0.isActive }
+        sessions.removeAll { $0.state != .running }
         let remainingIds = Set(sessions.map { $0.id })
         sessionMap = sessionMap.filter { remainingIds.contains($0.key) }
         updateActiveCount()

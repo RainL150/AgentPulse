@@ -14,12 +14,52 @@ enum SessionAgent: String {
     }
 }
 
+// MARK: - SessionState
+
+enum SessionState: String {
+    case running    // 正在执行（有 prompt/tool 事件）
+    case idle       // 空闲等待（超时无活动，但没有 stop）
+    case stopped    // 主动中断（收到 stop 事件）
+    case expired    // 已过期（超过保留时间，待清理）
+
+    var isActive: Bool {
+        self == .running
+    }
+
+    var icon: String {
+        switch self {
+        case .running: return "circle.fill"
+        case .idle: return "pause.circle.fill"
+        case .stopped: return "stop.circle.fill"
+        case .expired: return "xmark.circle.fill"
+        }
+    }
+
+    var color: String {
+        switch self {
+        case .running: return "green"
+        case .idle: return "yellow"
+        case .stopped: return "gray"
+        case .expired: return "red"
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .running: return "运行中"
+        case .idle: return "空闲"
+        case .stopped: return "已停止"
+        case .expired: return "已过期"
+        }
+    }
+}
+
 // MARK: - Session
 
 class Session: Identifiable, ObservableObject {
     let id: String
     @Published var source: SessionAgent = .unknown
-    @Published var isActive: Bool = true
+    @Published var state: SessionState = .running
     @Published var cwd: String = ""
     @Published var requests: [UserRequest] = []
     @Published var tasks: [Task] = []
@@ -27,6 +67,9 @@ class Session: Identifiable, ObservableObject {
 
     var currentRequest: UserRequest? { requests.last }
     var activeTaskCount: Int { tasks.filter { $0.status != .completed }.count }
+
+    /// 兼容旧代码的便捷属性
+    var isActive: Bool { state.isActive }
 
     init(id: String) {
         self.id = id
@@ -70,6 +113,7 @@ struct ToolCall: Identifiable {
         case "WebFetch": return "arrow.down.doc"
         case "TaskCreate": return "plus.circle"
         case "TaskUpdate": return "checkmark.circle"
+        case "Git": return "arrow.triangle.branch"
         default: return "wrench"
         }
     }
@@ -78,7 +122,8 @@ struct ToolCall: Identifiable {
         if let path = input["file_path"] as? String {
             return (path as NSString).lastPathComponent
         }
-        if let cmd = input["command"] as? String {
+        // 支持 Claude Code 的 command 和 Codex 的 cmd
+        if let cmd = input["command"] as? String ?? input["cmd"] as? String {
             return String(cmd.prefix(40))
         }
         if let query = input["query"] as? String {
@@ -89,6 +134,13 @@ struct ToolCall: Identifiable {
         }
         if let subagentType = input["subagent_type"] as? String {
             return "[\(subagentType)]"
+        }
+        // Codex apply_patch
+        if input["patch"] != nil {
+            if let path = input["file_path"] as? String {
+                return (path as NSString).lastPathComponent
+            }
+            return "patch..."
         }
         return ""
     }
@@ -121,8 +173,9 @@ struct ToolCall: Identifiable {
             if let desc = input["description"] as? String {
                 return desc
             }
-            if let cmd = input["command"] as? String {
-                return String(cmd.prefix(60))
+            // 支持 Claude Code 的 command 和 Codex 的 cmd
+            if let cmd = input["command"] as? String ?? input["cmd"] as? String {
+                return String(cmd.prefix(80))
             }
         case "Grep":
             if let pattern = input["pattern"] as? String {
@@ -272,7 +325,8 @@ struct PermissionRequest: Identifiable {
             if let desc = input["description"] as? String {
                 return desc
             }
-            if let cmd = input["command"] as? String {
+            // 支持 Claude Code 的 command 和 Codex 的 cmd
+            if let cmd = input["command"] as? String ?? input["cmd"] as? String {
                 return String(cmd.prefix(60))
             }
         case "Edit":
@@ -318,7 +372,8 @@ struct PermissionRequest: Identifiable {
         switch tool {
         case "Bash":
             // summary 已显示 description，detail 只显示命令
-            if let cmd = input["command"] as? String {
+            // 支持 Claude Code 的 command 和 Codex 的 cmd
+            if let cmd = input["command"] as? String ?? input["cmd"] as? String {
                 return cmd
             }
         case "Edit":

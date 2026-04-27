@@ -90,6 +90,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.codexWatcher?.poll()
         }
 
+        // 连接会话中断事件到 SocketServer
+        SessionMonitor.shared.onSessionStopped = { [weak self] sessionId in
+            self?.socketServer.clearRequestsForSession(sessionId)
+        }
+
+        // 连接会话完成事件到灵动岛通知
+        SessionMonitor.shared.onSessionCompleted = { [weak self] session, summary in
+            guard let self = self, self.settings.notifyOnComplete else { return }
+            let name = session.cwd.isEmpty ? String(session.id.prefix(8)) : (session.cwd as NSString).lastPathComponent
+            self.islandState.showCompletion(sessionId: session.id, sessionName: name, summary: summary)
+            if self.settings.islandPlaySound {
+                NSSound(named: "Glass")?.play()
+            }
+        }
+
         // 启动 JSONL 文件监听
         let logPath = NSHomeDirectory() + "/.claude/tool-flow-logs/calls.jsonl"
         jsonlWatcher = JSONLWatcher(path: logPath) { record in
@@ -136,7 +151,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] _ in
             // 延迟一点恢复灵动岛，避免闪烁
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                self?.lastIslandExpanded = nil // 重置状态，强制重新计算
+                self?.lastIslandMode = nil // 重置状态，强制重新计算
                 self?.updateIslandPresentation()
             }
         }
@@ -275,9 +290,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.updateIslandPresentation()
             }
             .store(in: &cancellables)
+
+        islandState.$completionNotification
+            .sink { [weak self] _ in
+                self?.lastIslandMode = nil  // 强制重新计算
+                self?.updateIslandPresentation()
+            }
+            .store(in: &cancellables)
     }
 
-    private var lastIslandExpanded: Bool? = nil
+    private var lastIslandMode: String? = nil
 
     private func updateIslandPresentation() {
         guard settings.islandEnabled else {
@@ -291,19 +313,35 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let hasAttention = !socketServer.pendingPermissions.isEmpty || !socketServer.pendingQuestions.isEmpty
+        let hasNotification = islandState.completionNotification != nil
         let shouldExpand = islandState.isHovered || islandState.isPinnedExpanded || hasAttention
 
-        // 只在状态变化时调整窗口
-        if lastIslandExpanded != shouldExpand {
-            lastIslandExpanded = shouldExpand
+        // 计算当前模式
+        let currentMode: String
+        if hasNotification && !islandState.isHovered {
+            currentMode = "notification"
+        } else if shouldExpand {
+            currentMode = "expanded"
+        } else {
+            currentMode = "collapsed"
+        }
+
+        // 只在模式变化时调整窗口
+        if lastIslandMode != currentMode {
+            lastIslandMode = currentMode
 
             let size: NSSize
             let y: CGFloat
 
-            if shouldExpand {
+            switch currentMode {
+            case "notification":
+                // 通知气泡：紧凑的胶囊形状
+                size = NSSize(width: 360, height: 80)
+                y = screen.frame.maxY - size.height - 4
+            case "expanded":
                 size = NSSize(width: 520, height: 520)
                 y = screen.frame.maxY - size.height - 4
-            } else {
+            default:
                 size = NSSize(width: 180, height: 28)
                 y = screen.frame.maxY - size.height
             }

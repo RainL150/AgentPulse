@@ -133,7 +133,8 @@ final class CodexWatcher {
                   processedCallIds.insert(callId).inserted,
                   let name = payload["name"] as? String else { return }
             let arguments = parseJSONStringDictionary(payload["arguments"] as? String)
-            let toolCall = ToolCall(tool: mapFunctionToolName(name), input: arguments, time: timestamp)
+            let toolName = mapFunctionToolName(name, arguments: arguments)
+            let toolCall = ToolCall(tool: toolName, input: arguments, time: timestamp)
             monitor.addExternalToolCall(sessionId: sessionId, source: .codex, toolCall: toolCall, time: timestamp, cwd: cwd)
 
             if name == "update_plan", let plan = arguments["plan"] as? [[String: String]] {
@@ -207,10 +208,11 @@ final class CodexWatcher {
         }
     }
 
-    private func mapFunctionToolName(_ name: String) -> String {
+    private func mapFunctionToolName(_ name: String, arguments: [String: Any] = [:]) -> String {
         switch name {
         case "exec_command":
-            return "Bash"
+            // 从命令内容推断实际操作类型
+            return inferToolFromCommand(arguments)
         case "update_plan":
             return "TaskUpdate"
         case "list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource":
@@ -220,6 +222,58 @@ final class CodexWatcher {
         default:
             return name
         }
+    }
+
+    /// 从 exec_command 的命令内容推断实际工具类型
+    private func inferToolFromCommand(_ arguments: [String: Any]) -> String {
+        // Codex 用 cmd，有时也用 command
+        guard let cmd = arguments["cmd"] as? String ?? arguments["command"] as? String else {
+            return "Bash"
+        }
+
+        let trimmed = cmd.trimmingCharacters(in: .whitespaces)
+
+        // 读取文件：cat, head, tail, sed -n (打印), less, more
+        if trimmed.hasPrefix("cat ") ||
+           trimmed.hasPrefix("head ") ||
+           trimmed.hasPrefix("tail ") ||
+           trimmed.hasPrefix("less ") ||
+           trimmed.hasPrefix("more ") ||
+           trimmed.contains("sed -n ") {
+            return "Read"
+        }
+
+        // 搜索内容：rg, grep, ag, ack
+        if trimmed.hasPrefix("rg ") ||
+           trimmed.hasPrefix("grep ") ||
+           trimmed.hasPrefix("ag ") ||
+           trimmed.hasPrefix("ack ") {
+            // rg --files 是列出文件，属于 Glob
+            if trimmed.contains("--files") {
+                return "Glob"
+            }
+            return "Grep"
+        }
+
+        // 搜索文件：find, fd, ls (带 pattern)
+        if trimmed.hasPrefix("find ") ||
+           trimmed.hasPrefix("fd ") {
+            return "Glob"
+        }
+
+        // 写入文件：echo > 或 cat > 或 tee
+        if trimmed.contains(" > ") || trimmed.contains(" >> ") ||
+           trimmed.hasPrefix("tee ") {
+            return "Write"
+        }
+
+        // Git 操作
+        if trimmed.hasPrefix("git ") {
+            return "Git"
+        }
+
+        // 默认为 Bash
+        return "Bash"
     }
 
     private func mapCustomToolName(_ name: String) -> String {

@@ -45,6 +45,10 @@ struct IslandView: View {
         !socketServer.pendingPermissions.isEmpty || !socketServer.pendingQuestions.isEmpty
     }
 
+    private var hasNotification: Bool {
+        overlayState.completionNotification != nil
+    }
+
     // 没有匹配到会话的问题
     private var orphanedQuestions: [AskRequest] {
         let sessionIds = Set(monitor.sessions.map { $0.id })
@@ -58,7 +62,7 @@ struct IslandView: View {
     }
 
     private var shouldReveal: Bool {
-        overlayState.isHovered || overlayState.isPinnedExpanded || hasAttention
+        overlayState.isHovered || overlayState.isPinnedExpanded || hasAttention || hasNotification
     }
 
     private var isExpanded: Bool {
@@ -67,7 +71,13 @@ struct IslandView: View {
 
     var body: some View {
         Group {
-            if shouldReveal {
+            if hasNotification, let notification = overlayState.completionNotification {
+                // 灵动岛弹出式通知
+                notificationBubble(notification)
+                    .onHover { hovering in
+                        overlayState.isHovered = hovering
+                    }
+            } else if shouldReveal {
                 islandBody
                     .frame(width: 520, height: 520)
                     .onHover { hovering in
@@ -88,6 +98,75 @@ struct IslandView: View {
                     overlayState.isHovered = hovering
                 }
             }
+        }
+    }
+
+    /// 灵动岛弹出式通知气泡
+    private func notificationBubble(_ notification: CompletionNotification) -> some View {
+        HStack(spacing: 12) {
+            // 左侧：完成图标
+            ZStack {
+                Circle()
+                    .fill(Color.green)
+                    .frame(width: 36, height: 36)
+                Image(systemName: "checkmark")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(.white)
+            }
+
+            // 中间：会话名称和摘要
+            VStack(alignment: .leading, spacing: 2) {
+                Text(notification.sessionName)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                Text(notification.summary)
+                    .font(.system(size: 11))
+                    .foregroundColor(.white.opacity(0.7))
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: 200, alignment: .leading)
+
+            Spacer(minLength: 8)
+
+            // 右侧：跳转按钮
+            Button(action: {
+                overlayState.dismissCompletion()
+                onJump(notification.sessionId, "")
+            }) {
+                Image(systemName: "terminal")
+                    .font(.system(size: 14))
+                    .foregroundColor(.white.opacity(0.8))
+                    .frame(width: 32, height: 32)
+                    .background(Color.white.opacity(0.15))
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(height: 60)
+        .background(
+            Capsule()
+                .fill(Color.black.opacity(0.85))
+                .overlay(
+                    Capsule()
+                        .stroke(Color.green.opacity(0.4), lineWidth: 1)
+                )
+        )
+        .shadow(color: Color.black.opacity(0.3), radius: 20, x: 0, y: 8)
+        .contentShape(Capsule())
+        .onTapGesture {
+            // 点击打开灵动岛并展示该会话详情
+            let sessionId = notification.sessionId
+            overlayState.dismissCompletion()
+            // 展开会话详情
+            if expandedSessionIds.contains(sessionId) {
+                // 已展开则保持
+            } else {
+                expandedSessionIds.insert(sessionId)
+            }
+            overlayState.showSession(id: sessionId)
         }
     }
 
@@ -364,12 +443,16 @@ struct IslandView: View {
         // 有待处理事项时自动展开
         let shouldExpand = isExpanded || hasAttention
 
-        // 状态颜色：待处理 > 已完成 > 活跃 > 不活跃
+        // 状态颜色：待处理 > 已完成 > 会话状态
         let dotColor: Color = {
             if hasAttention { return .orange }
             if isCompleted { return .purple }
-            if session.isActive { return .green }
-            return Color(white: 0.4)
+            switch session.state {
+            case .running: return .green
+            case .idle: return .yellow
+            case .stopped: return Color(white: 0.5)
+            case .expired: return Color(white: 0.3)
+            }
         }()
 
         return VStack(alignment: .leading, spacing: 0) {
@@ -1045,7 +1128,7 @@ struct IslandView: View {
     private func expandedSessionRow(_ session: Session) -> some View {
         HStack(spacing: 10) {
             Circle()
-                .fill(session.isActive ? Color.green : Color.gray)
+                .fill(stateColor(session.state))
                 .frame(width: 8, height: 8)
 
             VStack(alignment: .leading, spacing: 2) {
@@ -1148,6 +1231,15 @@ struct IslandView: View {
         if interval < 60 { return "\(interval)s" }
         if interval < 3600 { return "\(interval / 60)m" }
         return "\(interval / 3600)h"
+    }
+
+    private func stateColor(_ state: SessionState) -> Color {
+        switch state {
+        case .running: return .green
+        case .idle: return .yellow
+        case .stopped: return Color(white: 0.5)
+        case .expired: return Color(white: 0.3)
+        }
     }
 
     private func toolColor(_ tool: String) -> Color {
