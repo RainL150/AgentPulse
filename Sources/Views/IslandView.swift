@@ -697,10 +697,11 @@ struct IslandView: View {
                     }
                 }
             } else {
-                // 折叠显示图标流（最新的在最左边）
+                // 折叠显示图标流（最新的在最右边，优先可见）
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
-                        ForEach(Array(tools.suffix(6).reversed().enumerated()), id: \.element.id) { index, tool in
+                        Spacer(minLength: 0)
+                        ForEach(Array(tools.suffix(6).enumerated()), id: \.element.id) { index, tool in
                             if index > 0 {
                                 Image(systemName: "arrow.right")
                                     .font(.system(size: 8))
@@ -811,7 +812,8 @@ struct IslandView: View {
 
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 6) {
-                            ForEach(Array(tools.suffix(8).reversed().enumerated()), id: \.element.id) { index, tool in
+                            Spacer(minLength: 0)
+                            ForEach(Array(tools.suffix(8).enumerated()), id: \.element.id) { index, tool in
                                 if index > 0 {
                                     Image(systemName: "arrow.right")
                                         .font(.system(size: 9))
