@@ -106,7 +106,25 @@ struct IslandView: View {
             if shouldReveal && !hasNotification {
                 islandBody
                     .frame(width: 520, height: 520)
+                    .contentShape(Rectangle())
                     .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                    .onHover { hovering in
+                        if hovering {
+                            collapseWorkItem?.cancel()
+                            collapseWorkItem = nil
+                            overlayState.isHovered = true
+                        } else if !hasAttention && !overlayState.isPinnedExpanded {
+                            // 鼠标离开整个展开区域：延迟收起
+                            collapseWorkItem?.cancel()
+                            let workItem = DispatchWorkItem { [weak overlayState] in
+                                guard let overlayState = overlayState else { return }
+                                overlayState.isHovered = false
+                                overlayState.showOverview(expanded: false)
+                            }
+                            collapseWorkItem = workItem
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: workItem)
+                        }
+                    }
             }
         }
         .animation(.easeInOut(duration: 0.2), value: shouldReveal)
@@ -193,26 +211,6 @@ struct IslandView: View {
             )
             .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
             .shadow(color: Color.black.opacity(0.34), radius: 28, x: 0, y: 12)
-            .onHover { hovering in
-                if hovering {
-                    // 鼠标进入：立即取消收起操作，保持展开
-                    collapseWorkItem?.cancel()
-                    collapseWorkItem = nil
-                    overlayState.isHovered = true
-                } else if !hasAttention && !overlayState.isPinnedExpanded {
-                    // 鼠标离开：延迟收起，避免闪烁
-                    // 关键：不立即设置 isHovered = false，等延迟后再设置
-                    collapseWorkItem?.cancel()
-                    let workItem = DispatchWorkItem { [weak overlayState] in
-                        guard let overlayState = overlayState else { return }
-                        // 延迟后才设置 isHovered = false 并收起
-                        overlayState.isHovered = false
-                        overlayState.showOverview(expanded: false)
-                    }
-                    collapseWorkItem = workItem
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: workItem)
-                }
-            }
     }
 
     @ViewBuilder
@@ -682,9 +680,9 @@ struct IslandView: View {
             }
 
             if isToolExpanded {
-                // 展开显示详细列表（最新的在最上面）
+                // 展开显示详细列表（与折叠顺序一致：旧→新）
                 VStack(alignment: .leading, spacing: 4) {
-                    ForEach(tools.suffix(10).reversed()) { tool in
+                    ForEach(tools.suffix(10)) { tool in
                         HStack(spacing: 6) {
                             Image(systemName: tool.icon)
                                 .font(.system(size: 10))
