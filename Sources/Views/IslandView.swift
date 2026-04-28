@@ -71,18 +71,9 @@ struct IslandView: View {
     }
 
     var body: some View {
-        Group {
-            if hasNotification, let notification = overlayState.completionNotification {
-                // 灵动岛弹出式通知
-                notificationBubble(notification)
-                    .onHover { hovering in
-                        overlayState.isHovered = hovering
-                    }
-            } else if shouldReveal {
-                islandBody
-                    .frame(width: 520, height: 520)
-            } else {
-                // 收起状态：小胶囊（增大hover区域防止抖动）
+        ZStack {
+            // 收起状态：小胶囊
+            if !shouldReveal {
                 HStack {
                     Spacer()
                     Capsule()
@@ -90,31 +81,36 @@ struct IslandView: View {
                         .frame(width: 100, height: 6)
                     Spacer()
                 }
-                .frame(width: 280, height: 50)  // 增大hover区域
+                .frame(width: 280, height: 50)
                 .contentShape(Rectangle())
+                .transition(.opacity.combined(with: .scale(scale: 0.8)))
                 .onHover { hovering in
                     if hovering {
-                        // 鼠标进入：立即取消收起操作
                         collapseWorkItem?.cancel()
                         collapseWorkItem = nil
                         overlayState.isHovered = true
-                    } else {
-                        // 鼠标离开：延迟收起，给鼠标移动到展开区域的时间
-                        if !hasAttention {
-                            collapseWorkItem?.cancel()
-                            let workItem = DispatchWorkItem { [weak overlayState] in
-                                guard let overlayState = overlayState else { return }
-                                if !overlayState.isHovered {
-                                    overlayState.isHovered = false
-                                }
-                            }
-                            collapseWorkItem = workItem
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: workItem)
-                        }
                     }
                 }
             }
+
+            // 通知气泡
+            if hasNotification, let notification = overlayState.completionNotification {
+                notificationBubble(notification)
+                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                    .onHover { hovering in
+                        overlayState.isHovered = hovering
+                    }
+            }
+
+            // 展开状态：完整面板
+            if shouldReveal && !hasNotification {
+                islandBody
+                    .frame(width: 520, height: 520)
+                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
+            }
         }
+        .animation(.easeInOut(duration: 0.2), value: shouldReveal)
+        .animation(.easeInOut(duration: 0.2), value: hasNotification)
     }
 
     /// 灵动岛弹出式通知气泡
@@ -203,20 +199,18 @@ struct IslandView: View {
                     collapseWorkItem?.cancel()
                     collapseWorkItem = nil
                     overlayState.isHovered = true
-                } else {
+                } else if !hasAttention && !overlayState.isPinnedExpanded {
                     // 鼠标离开：延迟收起，避免闪烁
-                    overlayState.isHovered = false
-                    if !hasAttention && !overlayState.isPinnedExpanded {
-                        collapseWorkItem?.cancel()
-                        let workItem = DispatchWorkItem { [weak overlayState] in
-                            guard let overlayState = overlayState else { return }
-                            if !overlayState.isHovered && !overlayState.isPinnedExpanded {
-                                overlayState.showOverview(expanded: false)
-                            }
-                        }
-                        collapseWorkItem = workItem
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: workItem)
+                    // 关键：不立即设置 isHovered = false，等延迟后再设置
+                    collapseWorkItem?.cancel()
+                    let workItem = DispatchWorkItem { [weak overlayState] in
+                        guard let overlayState = overlayState else { return }
+                        // 延迟后才设置 isHovered = false 并收起
+                        overlayState.isHovered = false
+                        overlayState.showOverview(expanded: false)
                     }
+                    collapseWorkItem = workItem
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: workItem)
                 }
             }
     }
