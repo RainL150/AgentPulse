@@ -680,8 +680,13 @@ struct IslandView: View {
             }
 
             if isToolExpanded {
-                // 展开显示详细列表（与折叠顺序一致：旧→新）
+                // 展开显示详细列表（折叠上侧旧的，显示下侧新的）
                 VStack(alignment: .leading, spacing: 4) {
+                    if tools.count > 10 {
+                        Text("... 还有 \(tools.count - 10) 个旧操作")
+                            .font(.system(size: 9))
+                            .foregroundColor(.white.opacity(0.4))
+                    }
                     ForEach(tools.suffix(10)) { tool in
                         HStack(spacing: 6) {
                             Image(systemName: tool.icon)
@@ -698,17 +703,20 @@ struct IslandView: View {
                                 .lineLimit(1)
                         }
                     }
-                    if tools.count > 10 {
-                        Text("... 还有 \(tools.count - 10) 个操作")
-                            .font(.system(size: 9))
-                            .foregroundColor(.white.opacity(0.4))
-                    }
                 }
             } else {
-                // 折叠显示图标流（最新的在最右边，优先可见）
+                // 折叠显示图标流（折叠左侧旧的，显示右侧新的）
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
                         Spacer(minLength: 0)
+                        if tools.count > 6 {
+                            Text("...\(tools.count - 6)")
+                                .font(.system(size: 9))
+                                .foregroundColor(.white.opacity(0.4))
+                            Image(systemName: "arrow.right")
+                                .font(.system(size: 8))
+                                .foregroundColor(.white.opacity(0.3))
+                        }
                         ForEach(Array(tools.suffix(6).enumerated()), id: \.element.id) { index, tool in
                             if index > 0 {
                                 Image(systemName: "arrow.right")
@@ -722,18 +730,12 @@ struct IslandView: View {
                                     .frame(width: 26, height: 26)
                                     .background(toolColor(tool.tool).opacity(0.15))
                                     .cornerRadius(6)
-                                // 显示工具的中文描述
                                 Text(toolFlowLabel(tool))
                                     .font(.system(size: 8))
                                     .foregroundColor(.white.opacity(0.6))
                                     .lineLimit(1)
                                     .frame(maxWidth: 80)
                             }
-                        }
-                        if tools.count > 6 {
-                            Text("+\(tools.count - 6)")
-                                .font(.system(size: 9))
-                                .foregroundColor(.white.opacity(0.4))
                         }
                     }
                 }
@@ -821,6 +823,14 @@ struct IslandView: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 6) {
                             Spacer(minLength: 0)
+                            if tools.count > 8 {
+                                Text("...\(tools.count - 8)")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.white.opacity(0.4))
+                                Image(systemName: "arrow.right")
+                                    .font(.system(size: 9))
+                                    .foregroundColor(.white.opacity(0.3))
+                            }
                             ForEach(Array(tools.suffix(8).enumerated()), id: \.element.id) { index, tool in
                                 if index > 0 {
                                     Image(systemName: "arrow.right")
@@ -840,11 +850,6 @@ struct IslandView: View {
                                         .lineLimit(1)
                                         .frame(width: 50)
                                 }
-                            }
-                            if tools.count > 8 {
-                                Text("+\(tools.count - 8)")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.white.opacity(0.4))
                             }
                         }
                     }
