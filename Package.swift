@@ -10,7 +10,10 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "AgentPulse",
-            path: "Sources"
+            path: "Sources",
+            resources: [
+                .copy("../Resources/AppIcon.icns")
+            ]
         )
     ]
 )

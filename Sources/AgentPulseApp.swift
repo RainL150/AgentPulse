@@ -102,7 +102,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         SessionMonitor.shared.onSessionCompleted = { [weak self] session, summary in
             guard let self = self, self.settings.notifyOnComplete else { return }
             let name = session.cwd.isEmpty ? String(session.id.prefix(8)) : (session.cwd as NSString).lastPathComponent
-            self.islandState.showCompletion(sessionId: session.id, sessionName: name, summary: summary)
+            let prompt = session.currentRequest?.prompt ?? ""
+            self.islandState.showCompletion(sessionId: session.id, sessionName: name, prompt: prompt, summary: summary)
             if self.settings.islandPlaySound {
                 NSSound(named: "Glass")?.play()
             }
@@ -119,6 +120,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         codexWatcher = CodexWatcher(monitor: SessionMonitor.shared)
         codexWatcher?.start()
+
+        // 启动 Token 使用统计服务
+        TokenUsageService.shared.start()
 
         // 恢复持久化的会话
         SessionMonitor.shared.restoreFromPersistence()
@@ -345,6 +349,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 只在模式变化时调整窗口
         if lastIslandMode != currentMode {
+            let previousMode = lastIslandMode
             lastIslandMode = currentMode
 
             let size: NSSize
@@ -352,11 +357,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             switch currentMode {
             case "notification":
-                // 通知气泡：紧凑的胶囊形状
-                size = NSSize(width: 360, height: 80)
+                // 通知气泡：显示用户问题和AI总结
+                size = NSSize(width: 440, height: 180)
                 y = screen.frame.maxY - size.height - 4
             case "expanded":
-                size = NSSize(width: 520, height: 520)
+                // 动态高度：最小400，最大屏幕高度的70%
+                let maxHeight = min(screen.visibleFrame.height * 0.7, 700)
+                size = NSSize(width: 520, height: maxHeight)
                 y = screen.frame.maxY - size.height - 4
             default:
                 size = NSSize(width: 180, height: 28)
@@ -364,7 +371,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
             let x = screen.visibleFrame.midX - size.width / 2
-            islandWindow.setFrame(NSRect(origin: NSPoint(x: x, y: y), size: size), display: true, animate: false)
+            let newFrame = NSRect(origin: NSPoint(x: x, y: y), size: size)
+
+            // 使用 NSAnimationContext 实现平滑窗口动画
+            let shouldAnimate = previousMode != nil  // 首次显示不动画
+            if shouldAnimate {
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.25
+                    context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                    islandWindow.animator().setFrame(newFrame, display: true)
+                }
+            } else {
+                islandWindow.setFrame(newFrame, display: true, animate: false)
+            }
         }
 
         islandWindow.orderFrontRegardless()

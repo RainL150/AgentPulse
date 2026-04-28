@@ -20,6 +20,10 @@ class SessionMonitor: ObservableObject {
     /// 会话完成时的回调（收到 summary）
     var onSessionCompleted: ((Session, String) -> Void)?
 
+    /// 已通知的完成记录（用于去重）
+    private var notifiedCompletions: [String: Date] = [:]  // key: sessionId+summaryHash
+    private let notificationDedupeWindow: TimeInterval = 60  // 60秒内相同通知只发一次
+
     private init() {}
 
     // MARK: - Persistence
@@ -104,8 +108,14 @@ class SessionMonitor: ObservableObject {
                 } else {
                     session.currentRequest?.summary = summary
                 }
-                // 通知会话完成
-                onSessionCompleted?(session, summary.result)
+                // 通知会话完成（带去重）
+                let completionKey = "\(record.sessionId)-\(summary.result.hashValue)"
+                let now = Date()
+                cleanupOldNotifications(before: now.addingTimeInterval(-notificationDedupeWindow))
+                if notifiedCompletions[completionKey] == nil {
+                    notifiedCompletions[completionKey] = now
+                    onSessionCompleted?(session, summary.result)
+                }
             }
 
         case "stop":
@@ -235,9 +245,13 @@ class SessionMonitor: ObservableObject {
         return session
     }
 
+    // 存储 Claude task ID 到内部索引的映射
+    private var taskIdMapping: [String: [String: Int]] = [:] // sessionId -> [claudeTaskId -> index]
+
     private func handleTaskCreate(session: Session, input: [String: Any]) {
         guard let subject = input["subject"] as? String else { return }
-        let taskId = String(session.tasks.count + 1)
+        let internalIndex = session.tasks.count
+        let taskId = String(internalIndex + 1)
         let task = Task(
             id: taskId,
             subject: subject,
@@ -248,20 +262,61 @@ class SessionMonitor: ObservableObject {
     }
 
     private func handleTaskUpdate(session: Session, input: [String: Any]) {
-        guard let taskId = input["taskId"] as? String,
+        guard let taskIdStr = input["taskId"] as? String,
               let statusStr = input["status"] as? String,
               let status = TaskStatus(rawValue: statusStr) else { return }
 
-        if let idx = session.tasks.firstIndex(where: { $0.id == taskId }) {
+        // 策略1: 直接匹配内部 ID
+        if let idx = session.tasks.firstIndex(where: { $0.id == taskIdStr }) {
             session.tasks[idx].status = status
             if let subject = input["subject"] as? String {
                 session.tasks[idx].subject = subject
+            }
+            return
+        }
+
+        // 策略2: Claude task ID 是全局递增的，计算相对偏移
+        // 如果有映射记录，使用映射
+        if let mapping = taskIdMapping[session.id],
+           let idx = mapping[taskIdStr],
+           idx < session.tasks.count {
+            session.tasks[idx].status = status
+            if let subject = input["subject"] as? String {
+                session.tasks[idx].subject = subject
+            }
+            return
+        }
+
+        // 策略3: 按顺序更新 - 记录这个 Claude ID 对应的下一个未映射任务
+        if taskIdMapping[session.id] == nil {
+            taskIdMapping[session.id] = [:]
+        }
+
+        // 找到第一个还没有被映射的任务（按状态判断：pending 且未被更新过）
+        var mappedIndices = Set<Int>()
+        if let mapping = taskIdMapping[session.id] {
+            mappedIndices = Set(mapping.values)
+        }
+        for (idx, task) in session.tasks.enumerated() {
+            if !mappedIndices.contains(idx) {
+                // 建立映射并更新
+                taskIdMapping[session.id]?[taskIdStr] = idx
+                session.tasks[idx].status = status
+                if let subject = input["subject"] as? String {
+                    session.tasks[idx].subject = subject
+                }
+                return
             }
         }
     }
 
     private func updateActiveCount() {
         activeCount = sessions.filter { $0.state == .running }.count
+    }
+
+    /// 清理过期的通知去重记录
+    private func cleanupOldNotifications(before cutoff: Date) {
+        notifiedCompletions = notifiedCompletions.filter { $0.value > cutoff }
     }
 
     /// 刷新所有会话的状态（基于最后更新时间）

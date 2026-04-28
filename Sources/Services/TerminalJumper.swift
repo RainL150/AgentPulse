@@ -39,6 +39,31 @@ enum TerminalJumper {
         }
     }
 
+    /// 跳转到 EnsoAI
+    static func jumpToEnsoAI(cwd: String? = nil) {
+        NSLog("🚀 TerminalJumper.jumpToEnsoAI called - cwd: %@", cwd ?? "nil")
+
+        let workDir = cwd ?? ""
+        var command = ""
+        if !workDir.isEmpty {
+            command = "cd \(shellQuote(workDir)) && ensoai"
+        } else {
+            command = "ensoai"
+        }
+
+        let iTermRunning = NSWorkspace.shared.runningApplications.contains(where: {
+            $0.bundleIdentifier == "com.googlecode.iterm2"
+        })
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            if iTermRunning {
+                openInITerm2(command: command)
+            } else {
+                openInTerminal(command: command)
+            }
+        }
+    }
+
     /// 跳转到最近活跃的终端
     static func jumpToLatest() {
         // 检查 iTerm2 是否正在运行

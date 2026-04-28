@@ -5,7 +5,8 @@ struct CompletionNotification: Identifiable {
     let id = UUID()
     let sessionId: String
     let sessionName: String
-    let summary: String
+    let prompt: String      // 用户问题
+    let summary: String     // AI 总结
     let timestamp: Date
 }
 
@@ -52,10 +53,11 @@ final class IslandOverlayState: ObservableObject {
         isPinnedExpanded = true
     }
 
-    func showCompletion(sessionId: String, sessionName: String, summary: String) {
+    func showCompletion(sessionId: String, sessionName: String, prompt: String, summary: String) {
         let notification = CompletionNotification(
             sessionId: sessionId,
             sessionName: sessionName,
+            prompt: prompt,
             summary: summary,
             timestamp: Date()
         )
