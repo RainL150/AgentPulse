@@ -190,13 +190,11 @@ struct IslandView: View {
             // 点击打开灵动岛并展示该会话详情
             let sessionId = notification.sessionId
             overlayState.dismissCompletion()
-            // 展开会话详情
-            if expandedSessionIds.contains(sessionId) {
-                // 已展开则保持
-            } else {
-                expandedSessionIds.insert(sessionId)
-            }
-            overlayState.showSession(id: sessionId)
+            // 展开会话详情（不设置 isPinnedExpanded，让鼠标移出时可以收起）
+            expandedSessionIds.removeAll()
+            expandedSessionIds.insert(sessionId)
+            overlayState.selectedSessionId = sessionId
+            overlayState.isHovered = true  // 触发展开，但不锁定
         }
     }
 
