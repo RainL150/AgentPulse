@@ -687,18 +687,26 @@ struct IslandView: View {
                     }
                     ForEach(tools.suffix(10)) { tool in
                         HStack(spacing: 6) {
-                            Image(systemName: tool.icon)
+                            // 状态指示器
+                            Image(systemName: tool.status == .failed ? "xmark.circle.fill" : tool.icon)
                                 .font(.system(size: 10))
-                                .foregroundColor(toolColor(tool.tool))
+                                .foregroundColor(tool.status == .failed ? .red : toolColor(tool.tool))
                                 .frame(width: 14)
                             Text(tool.tool)
                                 .font(.system(size: 10, weight: .medium))
-                                .foregroundColor(toolColor(tool.tool))
+                                .foregroundColor(tool.status == .failed ? .red : toolColor(tool.tool))
                                 .frame(width: 50, alignment: .leading)
                             Text(tool.fullDetail.isEmpty ? tool.detail : tool.fullDetail)
                                 .font(.system(size: 10))
                                 .foregroundColor(.white.opacity(0.7))
                                 .lineLimit(1)
+                            Spacer()
+                            // 耗时显示
+                            if let duration = tool.durationText {
+                                Text(duration)
+                                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                    .foregroundColor(.white.opacity(0.5))
+                            }
                         }
                     }
                 }

@@ -91,6 +91,14 @@ class UserRequest: Identifiable, ObservableObject {
     }
 }
 
+// MARK: - ToolStatus
+
+enum ToolStatus {
+    case success
+    case failed
+    case timeout
+}
+
 // MARK: - ToolCall
 
 struct ToolCall: Identifiable {
@@ -98,6 +106,22 @@ struct ToolCall: Identifiable {
     let tool: String
     let input: [String: Any]
     let time: Date
+    var duration: TimeInterval?  // 执行耗时（秒）
+    var status: ToolStatus = .success  // 执行状态
+
+    // 格式化耗时显示
+    var durationText: String? {
+        guard let d = duration else { return nil }
+        if d < 1 {
+            return "\(Int(d * 1000))ms"
+        } else if d < 60 {
+            return String(format: "%.1fs", d)
+        } else {
+            let mins = Int(d) / 60
+            let secs = Int(d) % 60
+            return "\(mins)m\(secs)s"
+        }
+    }
 
     var icon: String {
         switch tool {

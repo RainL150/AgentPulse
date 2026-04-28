@@ -22,6 +22,24 @@ class SessionMonitor: ObservableObject {
 
     private init() {}
 
+    // MARK: - Persistence
+
+    func restoreFromPersistence() {
+        let restored = SessionPersistence.shared.load()
+        for session in restored {
+            sessionMap[session.id] = session
+            sessions.append(session)
+        }
+        // 刷新状态（根据时间判断是否过期）
+        refreshActiveStates()
+        updateActiveCount()
+        objectWillChange.send()
+    }
+
+    func saveToPersistence() {
+        SessionPersistence.shared.save(sessions: sessions)
+    }
+
     func handleRecord(_ record: LogRecord) {
         let session = getOrCreateSession(id: record.sessionId)
         session.source = .claude
@@ -41,11 +59,26 @@ class SessionMonitor: ObservableObject {
             // 工具调用
             if record.event == "PostToolUse",
                let tool = record.tool {
-                let toolCall = ToolCall(
+                // 计算上一个工具的耗时
+                if let currentRequest = session.currentRequest,
+                   !currentRequest.tools.isEmpty {
+                    let lastIndex = currentRequest.tools.count - 1
+                    let lastTool = currentRequest.tools[lastIndex]
+                    let duration = record.timestamp.timeIntervalSince(lastTool.time)
+                    session.currentRequest?.tools[lastIndex].duration = duration
+                }
+
+                var toolCall = ToolCall(
                     tool: tool,
                     input: record.input ?? [:],
                     time: record.timestamp
                 )
+
+                // 检测失败状态（通过 error 字段）
+                if let error = record.input?["error"] as? String, !error.isEmpty {
+                    toolCall.status = .failed
+                }
+
                 session.currentRequest?.tools.append(toolCall)
 
                 // 处理任务创建/更新

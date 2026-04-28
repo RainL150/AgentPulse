@@ -27,8 +27,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastAttentionKey: String?
     private var cancellables: Set<AnyCancellable> = []
     private var settingsWindowObserver: Any?
+    private var globalKeyMonitor: Any?
+    private var localKeyMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        setupKeyboardShortcuts()
         // 启动 Socket 服务器
         socketServer.start()
 
@@ -117,7 +120,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         codexWatcher = CodexWatcher(monitor: SessionMonitor.shared)
         codexWatcher?.start()
 
+        // 恢复持久化的会话
+        SessionMonitor.shared.restoreFromPersistence()
+
+        // 定期自动保存会话（每30秒）
+        Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { _ in
+            SessionMonitor.shared.saveToPersistence()
+        }
+
         NSLog("AgentPulse started")
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        // 退出时保存会话
+        SessionMonitor.shared.saveToPersistence()
+        NSLog("AgentPulse 会话已保存")
     }
 
     @objc func togglePanel() {
@@ -267,7 +284,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func configureSettingsWindow() {
         settingsWindow = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 350, height: 260),
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 540),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -372,5 +389,73 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return true
         }
         return screen.safeAreaInsets.top > 0
+    }
+
+    // MARK: - Keyboard Shortcuts
+
+    private func setupKeyboardShortcuts() {
+        // 本地快捷键（应用激活时）
+        localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if self?.handleKeyEvent(event) == true {
+                return nil  // 消费事件
+            }
+            return event
+        }
+
+        // 全局快捷键（应用未激活时）
+        globalKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            self?.handleKeyEvent(event)
+        }
+    }
+
+    @discardableResult
+    private func handleKeyEvent(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+
+        // ⌘B: 批量批准所有权限
+        if flags == .command && event.keyCode == 11 { // B
+            approveAllPermissions()
+            return true
+        }
+
+        // ⌘⇧B: 批量拒绝所有权限
+        if flags == [.command, .shift] && event.keyCode == 11 { // B
+            denyAllPermissions()
+            return true
+        }
+
+        // ⌘K: 清理非活跃会话
+        if flags == .command && event.keyCode == 40 { // K
+            SessionMonitor.shared.clearInactiveSessions()
+            return true
+        }
+
+        // ⌘⇧A: 切换灵动岛显示
+        if flags == [.command, .shift] && event.keyCode == 0 { // A
+            settings.islandEnabled.toggle()
+            return true
+        }
+
+        return false
+    }
+
+    private func approveAllPermissions() {
+        let permissions = socketServer.pendingPermissions
+        for permission in permissions {
+            socketServer.respondPermission(requestId: permission.id, approved: true)
+        }
+        if !permissions.isEmpty {
+            NSLog("⌘B: 批量批准 \(permissions.count) 个权限请求")
+        }
+    }
+
+    private func denyAllPermissions() {
+        let permissions = socketServer.pendingPermissions
+        for permission in permissions {
+            socketServer.respondPermission(requestId: permission.id, approved: false)
+        }
+        if !permissions.isEmpty {
+            NSLog("⌘⇧B: 批量拒绝 \(permissions.count) 个权限请求")
+        }
     }
 }

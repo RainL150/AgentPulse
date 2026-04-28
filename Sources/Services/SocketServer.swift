@@ -411,6 +411,15 @@ class SocketServer: ObservableObject {
                 return
             }
 
+            // 检查白名单，自动批准匹配的请求
+            if PermissionWhitelist.shared.shouldAutoApprove(request) {
+                NSLog("⚡ 白名单自动批准: \(tool)")
+                let response = "{\"action\":\"approve\"}\n"
+                Darwin.write(fd, response, response.utf8.count)
+                close(fd)
+                return
+            }
+
             permissionFds[request.id] = fd
             setupEventSource(fd: fd, requestId: request.id, isPermission: true)
 

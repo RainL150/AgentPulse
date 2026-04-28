@@ -17,6 +17,11 @@ final class IslandOverlayState: ObservableObject {
     @Published var focusedQuestionId: String?
     @Published var completionNotification: CompletionNotification?
 
+    // 通知队列
+    @Published var notificationQueue: [CompletionNotification] = []
+    @Published var notificationHistory: [CompletionNotification] = []
+    private let maxHistory = 20
+
     private var notificationTimer: Timer?
 
     func showOverview(expanded: Bool = true) {
@@ -48,18 +53,34 @@ final class IslandOverlayState: ObservableObject {
     }
 
     func showCompletion(sessionId: String, sessionName: String, summary: String) {
-        // 取消之前的定时器
-        notificationTimer?.invalidate()
-
-        completionNotification = CompletionNotification(
+        let notification = CompletionNotification(
             sessionId: sessionId,
             sessionName: sessionName,
             summary: summary,
             timestamp: Date()
         )
+
+        // 添加到历史记录
+        notificationHistory.insert(notification, at: 0)
+        if notificationHistory.count > maxHistory {
+            notificationHistory.removeLast()
+        }
+
+        // 如果当前没有显示通知，直接显示
+        if completionNotification == nil {
+            showNextNotification(notification)
+        } else {
+            // 否则添加到队列
+            notificationQueue.append(notification)
+        }
+    }
+
+    private func showNextNotification(_ notification: CompletionNotification) {
+        notificationTimer?.invalidate()
+        completionNotification = notification
         isPinnedExpanded = true
 
-        // 5秒后自动隐藏通知
+        // 5秒后自动切换到下一个或隐藏
         notificationTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { [weak self] _ in
             self?.dismissCompletion()
         }
@@ -69,9 +90,18 @@ final class IslandOverlayState: ObservableObject {
         notificationTimer?.invalidate()
         notificationTimer = nil
         completionNotification = nil
-        if !isHovered {
+
+        // 显示队列中的下一个通知
+        if !notificationQueue.isEmpty {
+            let next = notificationQueue.removeFirst()
+            showNextNotification(next)
+        } else if !isHovered {
             isPinnedExpanded = false
         }
+    }
+
+    var pendingNotificationCount: Int {
+        notificationQueue.count
     }
 
     func collapse() {
