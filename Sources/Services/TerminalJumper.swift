@@ -12,29 +12,19 @@ enum TerminalJumper {
         let workDir = cwd ?? session?.cwd ?? ""
         let sessionAgent = agent ?? session?.source ?? .claude
         let resumeCommand = buildResumeCommand(sessionId: sessionId, cwd: workDir, agent: sessionAgent)
-        let searchTerms = buildSearchTerms(sessionId: sessionId, cwd: workDir)
 
         let iTermRunning = NSWorkspace.shared.runningApplications.contains(where: {
             $0.bundleIdentifier == "com.googlecode.iterm2"
         })
 
-        // 在后台线程执行 AppleScript，避免阻塞 UI
         DispatchQueue.global(qos: .userInitiated).async {
-            NSLog("🔍 搜索词: %@", searchTerms.joined(separator: ", "))
             NSLog("📱 iTerm2 运行中: %@", iTermRunning ? "是" : "否")
 
             if iTermRunning {
-                if jumpITerm2(searchTerms: searchTerms) {
-                    return
-                }
                 openInITerm2(command: resumeCommand)
                 return
             }
 
-            NSLog("📺 尝试 Terminal.app")
-            if jumpTerminal(searchTerms: searchTerms) {
-                return
-            }
             openInTerminal(command: resumeCommand)
         }
     }
@@ -43,24 +33,8 @@ enum TerminalJumper {
     static func jumpToEnsoAI(cwd: String? = nil) {
         NSLog("🚀 TerminalJumper.jumpToEnsoAI called - cwd: %@", cwd ?? "nil")
 
-        let workDir = cwd ?? ""
-        var command = ""
-        if !workDir.isEmpty {
-            command = "cd \(shellQuote(workDir)) && ensoai"
-        } else {
-            command = "ensoai"
-        }
-
-        let iTermRunning = NSWorkspace.shared.runningApplications.contains(where: {
-            $0.bundleIdentifier == "com.googlecode.iterm2"
-        })
-
         DispatchQueue.global(qos: .userInitiated).async {
-            if iTermRunning {
-                openInITerm2(command: command)
-            } else {
-                openInTerminal(command: command)
-            }
+            _ = openEnsoAIApp(projectPath: cwd)
         }
     }
 
@@ -88,40 +62,6 @@ enum TerminalJumper {
         }
     }
 
-    // MARK: - iTerm2
-
-    private static func jumpITerm2(searchTerms: [String]) -> Bool {
-        let conditions = searchTerms.map { term in
-            let escaped = escapeAppleScript(term)
-            return #"sessionText contains "\#(escaped)""#
-        }.joined(separator: " or ")
-
-        let script = """
-        tell application "iTerm"
-            activate
-            set found to false
-            repeat with w in windows
-                repeat with t in tabs of w
-                    repeat with s in sessions of t
-                        set sessionText to (name of s as text) & " " & (tty of s as text)
-                        if \(conditions) then
-                            select t
-                            select s
-                            set found to true
-                            exit repeat
-                        end if
-                    end repeat
-                    if found then exit repeat
-                end repeat
-                if found then exit repeat
-            end repeat
-            return found
-        end tell
-        """
-
-        return runAppleScript(script)
-    }
-
     private static func openInITerm2(command: String) {
         let escapedCommand = escapeAppleScript(command)
         let script = """
@@ -144,49 +84,6 @@ enum TerminalJumper {
 
     // MARK: - Terminal.app
 
-    private static func jumpTerminal(searchTerms: [String]) -> Bool {
-        let listScript = """
-        tell application "Terminal"
-            set names to {}
-            repeat with w in windows
-                set end of names to name of w
-            end repeat
-            return names
-        end tell
-        """
-        if let script = NSAppleScript(source: listScript) {
-            var error: NSDictionary?
-            let result = script.executeAndReturnError(&error)
-            NSLog("📋 Terminal 窗口列表: %@", result.stringValue ?? "无")
-        }
-
-        let conditions = searchTerms.map { term in
-            let escaped = escapeAppleScript(term)
-            return #"tabText contains "\#(escaped)""#
-        }.joined(separator: " or ")
-
-        let script = """
-        tell application "Terminal"
-            activate
-            repeat with w in windows
-                repeat with t in tabs of w
-                    set tabText to (custom title of t as text) & " " & (name of t as text) & " " & (tty of t as text)
-                    if \(conditions) then
-                        set selected of t to true
-                        set frontmost of w to true
-                        return true
-                    end if
-                end repeat
-            end repeat
-            return false
-        end tell
-        """
-
-        let found = runAppleScript(script)
-        NSLog("🎯 Terminal 跳转结果: %@", found ? "找到" : "未找到")
-        return found
-    }
-
     private static func openInTerminal(command: String) {
         let escapedCommand = escapeAppleScript(command)
         let script = """
@@ -201,18 +98,67 @@ enum TerminalJumper {
 
     // MARK: - Helper
 
-    private static func buildSearchTerms(sessionId: String, cwd: String) -> [String] {
-        var terms: [String] = []
-        if !cwd.isEmpty {
-            terms.append(cwd)
-            let dirName = (cwd as NSString).lastPathComponent
-            if !dirName.isEmpty {
-                terms.append(dirName)
+    private static let ensoAIAppPath = "/Applications/EnsoAI.app"
+
+    @discardableResult
+    private static func openEnsoAIApp(projectPath: String?) -> Bool {
+        if let projectPath,
+           let deepLink = buildEnsoAIURL(projectPath: projectPath),
+           NSWorkspace.shared.open(deepLink) {
+            return true
+        }
+
+        let appURL = URL(fileURLWithPath: ensoAIAppPath)
+        guard FileManager.default.fileExists(atPath: appURL.path) else {
+            NSLog("⚠️ EnsoAI.app not found at path: %@", appURL.path)
+            showLaunchFailure(
+                title: "无法打开 EnsoAI",
+                message: "未找到 /Applications/EnsoAI.app"
+            )
+            return false
+        }
+
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        if let projectPath, !projectPath.isEmpty {
+            configuration.arguments = ["--open-path=\(projectPath)"]
+        }
+
+        DispatchQueue.main.async {
+            NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) { _, error in
+                if let error {
+                    NSLog("❌ Failed to open EnsoAI.app: %@", error.localizedDescription)
+                    showLaunchFailure(
+                        title: "无法打开 EnsoAI",
+                        message: error.localizedDescription
+                    )
+                }
             }
         }
-        terms.append(sessionId)
-        terms.append(String(sessionId.prefix(8)))
-        return Array(NSOrderedSet(array: terms)) as? [String] ?? terms
+        return true
+    }
+
+    private static func buildEnsoAIURL(projectPath: String) -> URL? {
+        guard !projectPath.isEmpty else { return nil }
+        var components = URLComponents()
+        components.scheme = "enso"
+        components.host = "open"
+        components.queryItems = [
+            URLQueryItem(name: "path", value: projectPath)
+        ]
+        return components.url
+    }
+
+    private static func showLaunchFailure(title: String, message: String) {
+        DispatchQueue.main.async {
+            NSSound.beep()
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = title
+            alert.informativeText = message
+            alert.addButton(withTitle: "确定")
+            alert.runModal()
+        }
     }
 
     private static func buildResumeCommand(sessionId: String, cwd: String, agent: SessionAgent) -> String {

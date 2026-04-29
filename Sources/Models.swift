@@ -209,7 +209,8 @@ struct ToolCall: Identifiable {
             }
         case "Glob":
             if let pattern = input["pattern"] as? String {
-                return pattern
+                let path = input["path"] as? String ?? "."
+                return "Search(\(pattern)) in \(path)"
             }
         case "WebSearch":
             if let query = input["query"] as? String {
@@ -432,6 +433,16 @@ struct PermissionRequest: Identifiable {
             if let path = input["path"] as? String {
                 return "路径: \(path)"
             }
+        case "Glob":
+            // summary 显示模式，detail 显示完整参数
+            var parts: [String] = []
+            if let pattern = input["pattern"] as? String {
+                parts.append("pattern: \"\(pattern)\"")
+            }
+            if let path = input["path"] as? String {
+                parts.append("path: \"\(path)\"")
+            }
+            return parts.joined(separator: ", ")
         case "Task":
             // summary 显示描述，detail 显示任务详情
             if let prompt = input["prompt"] as? String {

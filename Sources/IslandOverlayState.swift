@@ -1,13 +1,20 @@
 import Foundation
 
-/// 会话完成通知
+/// 通知类型
+enum NotificationType {
+    case completion  // 会话完成
+    case interrupted // 会话被中断
+}
+
+/// 会话通知
 struct CompletionNotification: Identifiable {
     let id = UUID()
     let sessionId: String
     let sessionName: String
     let prompt: String      // 用户问题
-    let summary: String     // AI 总结
+    let summary: String     // AI 总结 / 中断原因
     let timestamp: Date
+    var type: NotificationType = .completion
 }
 
 final class IslandOverlayState: ObservableObject {
@@ -22,6 +29,8 @@ final class IslandOverlayState: ObservableObject {
     @Published var notificationQueue: [CompletionNotification] = []
     @Published var notificationHistory: [CompletionNotification] = []
     private let maxHistory = 20
+    private let notificationDedupeWindow: TimeInterval = 60
+    private var recentNotificationKeys: [String: Date] = [:]
 
     private var notificationTimer: Timer?
 
@@ -54,13 +63,28 @@ final class IslandOverlayState: ObservableObject {
     }
 
     func showCompletion(sessionId: String, sessionName: String, prompt: String, summary: String) {
-        let notification = CompletionNotification(
+        showNotification(sessionId: sessionId, sessionName: sessionName, prompt: prompt, summary: summary, type: .completion)
+    }
+
+    func showInterruption(sessionId: String, sessionName: String, prompt: String, reason: String) {
+        showNotification(sessionId: sessionId, sessionName: sessionName, prompt: prompt, summary: reason, type: .interrupted)
+    }
+
+    private func showNotification(sessionId: String, sessionName: String, prompt: String, summary: String, type: NotificationType) {
+        let now = Date()
+        cleanupRecentNotifications(before: now.addingTimeInterval(-notificationDedupeWindow))
+        let notificationKey = completionKey(sessionId: sessionId, prompt: prompt, summary: summary)
+        guard recentNotificationKeys[notificationKey] == nil else { return }
+        recentNotificationKeys[notificationKey] = now
+
+        var notification = CompletionNotification(
             sessionId: sessionId,
             sessionName: sessionName,
             prompt: prompt,
             summary: summary,
-            timestamp: Date()
+            timestamp: now
         )
+        notification.type = type
 
         // 添加到历史记录
         notificationHistory.insert(notification, at: 0)
@@ -82,9 +106,20 @@ final class IslandOverlayState: ObservableObject {
         completionNotification = notification
         isPinnedExpanded = true
 
-        // 5秒后自动切换到下一个或隐藏
-        notificationTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { [weak self] _ in
-            self?.dismissCompletion()
+        scheduleNotificationDismiss()
+    }
+
+    func setNotificationHovered(_ hovering: Bool) {
+        isHovered = hovering
+
+        if hovering {
+            notificationTimer?.invalidate()
+            notificationTimer = nil
+            return
+        }
+
+        if completionNotification != nil {
+            scheduleNotificationDismiss()
         }
     }
 
@@ -113,5 +148,26 @@ final class IslandOverlayState: ObservableObject {
         focusedQuestionId = nil
         completionNotification = nil
         notificationTimer?.invalidate()
+    }
+
+    private func scheduleNotificationDismiss() {
+        notificationTimer?.invalidate()
+        let timer = Timer(timeInterval: 5.0, repeats: false) { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.dismissCompletion()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        notificationTimer = timer
+    }
+
+    private func completionKey(sessionId: String, prompt: String, summary: String) -> String {
+        let normalizedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedSummary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        return "\(sessionId)|\(normalizedPrompt)|\(normalizedSummary)"
+    }
+
+    private func cleanupRecentNotifications(before cutoff: Date) {
+        recentNotificationKeys = recentNotificationKeys.filter { $0.value >= cutoff }
     }
 }

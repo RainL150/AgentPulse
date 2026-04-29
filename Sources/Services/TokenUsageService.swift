@@ -47,7 +47,7 @@ struct TokenUsage {
     }
 }
 
-/// Token使用服务 - 从Claude Code的会话日志中读取token消耗数据
+/// Token使用服务 - 只跟踪最近活跃的会话日志，避免启动时全量扫描拖死 UI
 class TokenUsageService: ObservableObject {
     static let shared = TokenUsageService()
 
@@ -55,62 +55,66 @@ class TokenUsageService: ObservableObject {
     @Published var totalUsage = TokenUsage()
 
     private let projectsDir: String
-    private var watcher: DispatchSourceFileSystemObject?
+    private var scanTimer: Timer?
+    private var isScanning = false
     private var lastReadPositions: [String: UInt64] = [:]
+    private var cachedUsageByFile: [String: TokenUsage] = [:]
+    private let maxTrackedFiles = 120
+    private let recentActivityWindow: TimeInterval = 14 * 24 * 60 * 60
 
     private init() {
-        // Claude Code 会话日志目录
         projectsDir = NSHomeDirectory() + "/.claude/projects"
     }
 
     func start() {
-        // 初始扫描
-        scanAllSessions()
+        guard scanTimer == nil else { return }
 
-        // 监听变化（简化版，定期扫描）
-        Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
+        // 应用先起来，再在后台做首轮统计。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+            self?.scanAllSessions()
+        }
+
+        scanTimer = Timer.scheduledTimer(withTimeInterval: 15.0, repeats: true) { [weak self] _ in
             self?.scanAllSessions()
         }
     }
 
     func scanAllSessions() {
+        guard !isScanning else { return }
+        isScanning = true
+
         DispatchQueue.global(qos: .utility).async { [weak self] in
             self?.performScan()
         }
     }
 
     private func performScan() {
-        guard let dirs = try? FileManager.default.contentsOfDirectory(atPath: projectsDir) else {
+        defer { isScanning = false }
+
+        let files = recentSessionFiles()
+        guard !files.isEmpty else {
+            DispatchQueue.main.async { [weak self] in
+                self?.sessionUsage = [:]
+                self?.totalUsage = TokenUsage()
+            }
             return
         }
 
         var newSessionUsage: [String: TokenUsage] = [:]
         var newTotalUsage = TokenUsage()
 
-        for dir in dirs {
-            let dirPath = "\(projectsDir)/\(dir)"
-            var isDir: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: dirPath, isDirectory: &isDir),
-                  isDir.boolValue else {
-                continue
-            }
-
-            // 扫描该项目目录下的所有 JSONL 文件
-            guard let files = try? FileManager.default.contentsOfDirectory(atPath: dirPath) else {
-                continue
-            }
-
-            for file in files where file.hasSuffix(".jsonl") {
-                let filePath = "\(dirPath)/\(file)"
-                let sessionId = file.replacingOccurrences(of: ".jsonl", with: "")
-
-                let usage = parseSessionFile(path: filePath, sessionId: sessionId)
-                if usage.total > 0 {
-                    newSessionUsage[sessionId] = usage
-                    newTotalUsage.add(usage)
-                }
+        for filePath in files {
+            let sessionId = URL(fileURLWithPath: filePath).deletingPathExtension().lastPathComponent
+            let usage = parseSessionFile(path: filePath)
+            if usage.total > 0 {
+                newSessionUsage[sessionId] = usage
+                newTotalUsage.add(usage)
             }
         }
+
+        let tracked = Set(files)
+        cachedUsageByFile = cachedUsageByFile.filter { tracked.contains($0.key) }
+        lastReadPositions = lastReadPositions.filter { tracked.contains($0.key) }
 
         DispatchQueue.main.async { [weak self] in
             self?.sessionUsage = newSessionUsage
@@ -118,40 +122,129 @@ class TokenUsageService: ObservableObject {
         }
     }
 
-    private func parseSessionFile(path: String, sessionId: String) -> TokenUsage {
-        var usage = TokenUsage()
-
-        guard let data = FileManager.default.contents(atPath: path),
-              let content = String(data: data, encoding: .utf8) else {
-            return usage
+    private func recentSessionFiles() -> [String] {
+        let rootURL = URL(fileURLWithPath: projectsDir)
+        guard let projectDirs = try? FileManager.default.contentsOfDirectory(
+            at: rootURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
         }
 
-        let lines = content.components(separatedBy: "\n")
+        let now = Date()
+        var candidates: [(path: String, modifiedAt: Date)] = []
 
-        for line in lines where !line.isEmpty {
-            guard let lineData = line.data(using: .utf8),
-                  let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
-                  let message = json["message"] as? [String: Any],
-                  let usageData = message["usage"] as? [String: Any] else {
+        for dirURL in projectDirs {
+            guard let fileURLs = try? FileManager.default.contentsOfDirectory(
+                at: dirURL,
+                includingPropertiesForKeys: [.contentModificationDateKey],
+                options: [.skipsHiddenFiles]
+            ) else {
                 continue
             }
 
-            // 解析 token 数据
-            if let input = usageData["input_tokens"] as? Int {
-                usage.inputTokens += input
-            }
-            if let output = usageData["output_tokens"] as? Int {
-                usage.outputTokens += output
-            }
-            if let cacheCreation = usageData["cache_creation_input_tokens"] as? Int {
-                usage.cacheCreationTokens += cacheCreation
-            }
-            if let cacheRead = usageData["cache_read_input_tokens"] as? Int {
-                usage.cacheReadTokens += cacheRead
+            for fileURL in fileURLs where fileURL.pathExtension == "jsonl" {
+                let values = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey])
+                let modifiedAt = values?.contentModificationDate ?? .distantPast
+                if now.timeIntervalSince(modifiedAt) <= recentActivityWindow {
+                    candidates.append((fileURL.path, modifiedAt))
+                }
             }
         }
 
+        if candidates.isEmpty {
+            for dirURL in projectDirs.prefix(20) {
+                guard let fileURLs = try? FileManager.default.contentsOfDirectory(
+                    at: dirURL,
+                    includingPropertiesForKeys: [.contentModificationDateKey],
+                    options: [.skipsHiddenFiles]
+                ) else {
+                    continue
+                }
+
+                for fileURL in fileURLs where fileURL.pathExtension == "jsonl" {
+                    let values = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey])
+                    candidates.append((fileURL.path, values?.contentModificationDate ?? .distantPast))
+                }
+            }
+        }
+
+        return candidates
+            .sorted { $0.modifiedAt > $1.modifiedAt }
+            .prefix(maxTrackedFiles)
+            .map(\.path)
+    }
+
+    private func parseSessionFile(path: String) -> TokenUsage {
+        let previousUsage = cachedUsageByFile[path] ?? TokenUsage()
+        let previousOffset = lastReadPositions[path] ?? 0
+
+        guard
+            let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+            let fileSizeNumber = attributes[.size] as? NSNumber
+        else {
+            return previousUsage
+        }
+
+        let fileSize = fileSizeNumber.uint64Value
+        if previousOffset > fileSize {
+            lastReadPositions[path] = 0
+            cachedUsageByFile[path] = TokenUsage()
+            return parseSessionFile(path: path)
+        }
+
+        guard let handle = FileHandle(forReadingAtPath: path) else {
+            return previousUsage
+        }
+
+        defer { try? handle.close() }
+
+        if previousOffset > 0 {
+            try? handle.seek(toOffset: previousOffset)
+        }
+
+        let data = handle.readDataToEndOfFile()
+        guard !data.isEmpty else {
+            return previousUsage
+        }
+
+        guard let content = String(data: data, encoding: .utf8) else {
+            return previousUsage
+        }
+
+        var usage = previousUsage
+        for line in content.split(separator: "\n", omittingEmptySubsequences: true) {
+            guard let lineData = line.data(using: .utf8) else { continue }
+            accumulateUsage(from: lineData, into: &usage)
+        }
+
+        lastReadPositions[path] = fileSize
+        cachedUsageByFile[path] = usage
         return usage
+    }
+
+    private func accumulateUsage(from lineData: Data, into usage: inout TokenUsage) {
+        guard
+            let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+            let message = json["message"] as? [String: Any],
+            let usageData = message["usage"] as? [String: Any]
+        else {
+            return
+        }
+
+        if let input = usageData["input_tokens"] as? Int {
+            usage.inputTokens += input
+        }
+        if let output = usageData["output_tokens"] as? Int {
+            usage.outputTokens += output
+        }
+        if let cacheCreation = usageData["cache_creation_input_tokens"] as? Int {
+            usage.cacheCreationTokens += cacheCreation
+        }
+        if let cacheRead = usageData["cache_read_input_tokens"] as? Int {
+            usage.cacheReadTokens += cacheRead
+        }
     }
 
     /// 获取指定会话的token使用量

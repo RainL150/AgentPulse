@@ -51,6 +51,10 @@ struct IslandView: View {
         overlayState.completionNotification != nil
     }
 
+    private func session(for notification: CompletionNotification) -> Session? {
+        monitor.sessions.first(where: { $0.id == notification.sessionId })
+    }
+
     // 有待处理权限/问题的会话
     private var sessionWithAttention: Session? {
         // 优先显示有权限请求的会话
@@ -79,7 +83,9 @@ struct IslandView: View {
     }
 
     private var shouldReveal: Bool {
-        overlayState.isHovered || overlayState.isPinnedExpanded || hasAttention || hasNotification
+        // 用户悬停、主动展开、或有通知时显示
+        // 有审批时不强制显示，让用户可以隐藏
+        overlayState.isHovered || overlayState.isPinnedExpanded || hasNotification
     }
 
     private var isExpanded: Bool {
@@ -87,61 +93,37 @@ struct IslandView: View {
     }
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .top) {
             // 收起状态：小胶囊
             if !shouldReveal {
-                HStack {
-                    Spacer()
-                    Capsule()
-                        .fill(Color.white.opacity(0.6))
-                        .frame(width: 100, height: 6)
-                    Spacer()
-                }
-                .frame(width: 280, height: 50)
-                .contentShape(Rectangle())
-                .transition(.asymmetric(
-                    insertion: .opacity.animation(.easeIn(duration: 0.15)),
-                    removal: .opacity.animation(.easeOut(duration: 0.1))
-                ))
-                .onHover { hovering in
-                    if hovering {
-                        collapseWorkItem?.cancel()
-                        collapseWorkItem = nil
-                        overlayState.isHovered = true
-                    }
-                }
+                capsuleView
+                    .transition(.opacity.animation(.easeOut(duration: 0.2)))
             }
 
             // 通知气泡
             if hasNotification, let notification = overlayState.completionNotification {
                 notificationBubble(notification)
-                    .id(notification.id)  // 稳定视图标识，避免重建
-                    .transition(.asymmetric(
-                        insertion: .opacity.combined(with: .scale(scale: 0.95)).animation(.spring(response: 0.3, dampingFraction: 0.8)),
-                        removal: .opacity.animation(.easeOut(duration: 0.2))
-                    ))
+                    .id(notification.id)
+                    .transition(.scale(scale: 0.92, anchor: .top).combined(with: .opacity))
                     .onHover { hovering in
-                        overlayState.isHovered = hovering
+                        overlayState.setNotificationHovered(hovering)
                     }
             }
 
-            // 展开状态：完整面板（自适应高度）
+            // 展开状态：完整面板
             if shouldReveal && !hasNotification {
                 islandBody
                     .frame(minHeight: 200, maxHeight: 600)
                     .fixedSize(horizontal: false, vertical: true)
                     .contentShape(Rectangle())
-                    .transition(.asymmetric(
-                        insertion: .opacity.combined(with: .scale(scale: 0.95)).animation(.spring(response: 0.3, dampingFraction: 0.8)),
-                        removal: .opacity.animation(.easeOut(duration: 0.15))
-                    ))
+                    .transition(.opacity.animation(.easeOut(duration: 0.25)))
                     .onHover { hovering in
                         if hovering {
                             collapseWorkItem?.cancel()
                             collapseWorkItem = nil
                             overlayState.isHovered = true
-                        } else if !hasAttention {
-                            // 鼠标离开：延迟收起（如果有展开的会话，延迟更长）
+                        } else {
+                            // 允许随时隐藏，包括有待审批时
                             collapseWorkItem?.cancel()
                             let delay = expandedSessionIds.isEmpty ? 0.3 : 0.8
                             let workItem = DispatchWorkItem { [weak overlayState] in
@@ -154,12 +136,10 @@ struct IslandView: View {
                         }
                     }
                     .onChange(of: expandedSessionIds) { _ in
-                        // 展开/折叠会话时，取消收起计时器
                         collapseWorkItem?.cancel()
                         collapseWorkItem = nil
                     }
                     .onChange(of: hasAttention) { newValue in
-                        // 有新的待处理时自动展开相关会话
                         if newValue, let session = sessionWithAttention {
                             withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                                 expandedSessionIds.removeAll()
@@ -168,7 +148,6 @@ struct IslandView: View {
                         }
                     }
                     .onChange(of: socketServer.pendingPermissions.count) { _ in
-                        // 权限请求变化时展开
                         if let session = sessionWithAttention {
                             withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                                 expandedSessionIds.removeAll()
@@ -177,7 +156,6 @@ struct IslandView: View {
                         }
                     }
                     .onChange(of: socketServer.pendingQuestions.count) { _ in
-                        // 问题请求变化时展开
                         if let session = sessionWithAttention {
                             withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                                 expandedSessionIds.removeAll()
@@ -187,29 +165,56 @@ struct IslandView: View {
                     }
             }
         }
-        .animation(.spring(response: 0.25, dampingFraction: 0.85), value: shouldReveal)
-        .animation(.spring(response: 0.25, dampingFraction: 0.85), value: hasNotification)
+        .animation(.easeInOut(duration: 0.25), value: shouldReveal)
+        .animation(.easeInOut(duration: 0.25), value: hasNotification)
+    }
+
+    // 收起状态的胶囊视图
+    private var capsuleView: some View {
+        HStack {
+            Spacer()
+            Capsule()
+                .fill(Color.white.opacity(0.6))
+                .frame(width: 100, height: 6)
+            Spacer()
+        }
+        .frame(width: 280, height: 50)
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            if hovering {
+                collapseWorkItem?.cancel()
+                collapseWorkItem = nil
+                withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                    overlayState.isHovered = true
+                }
+            }
+        }
     }
 
     /// 灵动岛弹出式通知气泡
     private func notificationBubble(_ notification: CompletionNotification) -> some View {
         let pendingCount = overlayState.pendingNotificationCount
+        let isInterrupted = notification.type == .interrupted
+        let accentColor = isInterrupted ? Theme.warning : Theme.success
+        let iconName = isInterrupted ? "stop.fill" : "checkmark"
+        let badgeText = isInterrupted ? "已中断" : "完成"
 
         return VStack(alignment: .leading, spacing: 12) {
-            // 顶部：会话名称 + 按钮
+            // 顶部：会话名称 + 关闭
             HStack(spacing: 12) {
-                // 完成图标
                 ZStack {
                     Circle()
                         .fill(
                             LinearGradient(
-                                colors: [Theme.success, Color(hex: "059669")],
+                                colors: isInterrupted
+                                    ? [Theme.warning, Color(hex: "D97706")]
+                                    : [Theme.success, Color(hex: "059669")],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             )
                         )
                         .frame(width: 36, height: 36)
-                    Image(systemName: "checkmark")
+                    Image(systemName: iconName)
                         .font(.system(size: 14, weight: .bold))
                         .foregroundColor(.white)
                 }
@@ -220,7 +225,7 @@ struct IslandView: View {
                         Text(notification.sessionName)
                             .font(.system(size: 14, weight: .bold))
                             .foregroundColor(.white)
-                        TagBadge(text: "完成", color: Theme.success, style: .subtle)
+                        TagBadge(text: badgeText, color: accentColor, style: .subtle)
                         // 显示待处理通知数
                         if pendingCount > 0 {
                             Text("+\(pendingCount)")
@@ -236,56 +241,52 @@ struct IslandView: View {
 
                 Spacer()
 
-                // 按钮
-                HStack(spacing: 8) {
-                    // EnsoAI 按钮
-                    Button(action: {
-                        if let session = monitor.sessions.first(where: { $0.id == notification.sessionId }) {
-                            TerminalJumper.jumpToEnsoAI(cwd: session.cwd)
-                        } else {
-                            TerminalJumper.jumpToEnsoAI(cwd: nil)
-                        }
-                        overlayState.dismissCompletion()
-                    }) {
-                        Image(systemName: "wand.and.stars")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundColor(Theme.info)
-                            .frame(width: 32, height: 32)
-                            .background(Theme.bgTertiary)
-                            .clipShape(Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .help("启动 EnsoAI")
-
-                    // 终端按钮
-                    Button(action: {
-                        overlayState.dismissCompletion()
-                        onJump(notification.sessionId, "")
-                    }) {
-                        Image(systemName: "terminal")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundColor(.white)
-                            .frame(width: 32, height: 32)
-                            .background(Theme.bgTertiary)
-                            .clipShape(Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .help("跳转终端")
-
-                    // 关闭/下一个按钮
-                    Button(action: {
-                        overlayState.dismissCompletion()
-                    }) {
-                        Image(systemName: pendingCount > 0 ? "chevron.right" : "xmark")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundColor(.white.opacity(0.6))
-                            .frame(width: 28, height: 28)
-                            .background(Color.white.opacity(0.1))
-                            .clipShape(Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .help(pendingCount > 0 ? "下一条通知" : "关闭")
+                Button(action: {
+                    overlayState.dismissCompletion()
+                }) {
+                    Image(systemName: pendingCount > 0 ? "chevron.right" : "xmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(.white.opacity(0.6))
+                        .frame(width: 28, height: 28)
+                        .background(Color.white.opacity(0.1))
+                        .clipShape(Circle())
                 }
+                .buttonStyle(.plain)
+                .help(pendingCount > 0 ? "下一条通知" : "关闭")
+            }
+
+            let matchedSession = session(for: notification)
+
+            HStack(spacing: 10) {
+                Button(action: {
+                    TerminalJumper.jumpToEnsoAI(cwd: matchedSession?.cwd)
+                    overlayState.dismissCompletion()
+                }) {
+                    Label("打开 EnsoAI", systemImage: "wand.and.stars")
+                        .modifier(IslandSecondaryButtonStyle())
+                }
+                .buttonStyle(.plain)
+                .help("打开 EnsoAI")
+
+                Button(action: {
+                    overlayState.dismissCompletion()
+                    if let matchedSession {
+                        TerminalJumper.jump(
+                            to: matchedSession.id,
+                            cwd: matchedSession.cwd,
+                            agent: matchedSession.source
+                        )
+                    } else {
+                        TerminalJumper.jump(to: notification.sessionId, cwd: nil)
+                    }
+                }) {
+                    Label("跳转终端", systemImage: "terminal")
+                        .modifier(IslandSecondaryButtonStyle())
+                }
+                .buttonStyle(.plain)
+                .help("跳转终端")
+
+                Spacer(minLength: 0)
             }
 
             // 用户问题
@@ -301,11 +302,11 @@ struct IslandView: View {
                 }
             }
 
-            // AI 总结
+            // AI 总结 / 中断原因
             HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "sparkles")
+                Image(systemName: isInterrupted ? "exclamationmark.triangle.fill" : "sparkles")
                     .font(.system(size: 10))
-                    .foregroundColor(Theme.success)
+                    .foregroundColor(accentColor)
                 Text(notification.summary)
                     .font(.system(size: 12))
                     .foregroundColor(.white.opacity(0.9))
@@ -323,7 +324,7 @@ struct IslandView: View {
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
                         .stroke(
                             LinearGradient(
-                                colors: [Theme.success.opacity(0.5), Theme.success.opacity(0.2)],
+                                colors: [accentColor.opacity(0.5), accentColor.opacity(0.2)],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             ),
@@ -339,14 +340,14 @@ struct IslandView: View {
             expandedSessionIds.removeAll()
             expandedSessionIds.insert(sessionId)
             overlayState.selectedSessionId = sessionId
-            overlayState.isHovered = true
+            overlayState.setNotificationHovered(true)
         }
     }
 
     private var islandBody: some View {
         currentExpandedContent
             .padding(16)
-            .frame(width: 500)
+            .frame(width: 560)
             .background(GlassBackground(cornerRadius: 24, opacity: 0.92))
             .shadow(color: Color.black.opacity(0.5), radius: 40, x: 0, y: 20)
             .shadow(color: Theme.primary.opacity(0.1), radius: 60, x: 0, y: 30)
@@ -380,14 +381,7 @@ struct IslandView: View {
             // 头部区域
             HStack(alignment: .center) {
                 HStack(spacing: 10) {
-                    ZStack {
-                        Circle()
-                            .fill(Theme.gradientPrimary)
-                            .frame(width: 32, height: 32)
-                        Image(systemName: "cpu")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(.white)
-                    }
+                    PulseIconView(size: 32)
 
                     VStack(alignment: .leading, spacing: 2) {
                         Text("AgentPulse")
@@ -464,58 +458,73 @@ struct IslandView: View {
         return VStack(alignment: .leading, spacing: 0) {
             // 会话头部（点击展开/折叠）
             HStack(spacing: 12) {
-                StatusDot(color: dotColor, size: 10, animated: session.state == .running && !hasSummary)
+                Button(action: {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                        if expandedSessionIds.contains(session.id) {
+                            expandedSessionIds.remove(session.id)
+                        } else {
+                            expandedSessionIds.removeAll()
+                            expandedSessionIds.insert(session.id)
+                        }
+                    }
+                }) {
+                    HStack(spacing: 12) {
+                        StatusDot(color: dotColor, size: 10, animated: session.state == .running && !hasSummary)
 
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 8) {
-                        Text(session.cwd.isEmpty ? String(session.id.prefix(8)) : (session.cwd as NSString).lastPathComponent)
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(Theme.textPrimary)
-                        sourcePill(session.source)
-                        if hasSummary && !hasAttention {
-                            TagBadge(text: "完成", color: Theme.secondary, style: .subtle)
-                        }
-                        // 待审批徽章（更醒目）
-                        if !sessionPermissions.isEmpty {
-                            HStack(spacing: 4) {
-                                Image(systemName: "exclamationmark.shield.fill")
-                                    .font(.system(size: 9))
-                                Text("待审批")
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 8) {
+                                Text(session.cwd.isEmpty ? String(session.id.prefix(8)) : (session.cwd as NSString).lastPathComponent)
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundColor(Theme.textPrimary)
+                                sourcePill(session.source)
+                                if hasSummary && !hasAttention {
+                                    TagBadge(text: "完成", color: Theme.secondary, style: .subtle)
+                                }
+                                if !sessionPermissions.isEmpty {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "exclamationmark.shield.fill")
+                                            .font(.system(size: 9))
+                                        Text("待审批")
+                                    }
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
+                                    .background(Theme.warning)
+                                    .clipShape(Capsule())
+                                } else if !sessionQuestions.isEmpty {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "questionmark.circle.fill")
+                                            .font(.system(size: 9))
+                                        Text("待回答")
+                                    }
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
+                                    .background(Theme.info)
+                                    .clipShape(Capsule())
+                                }
                             }
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(Theme.warning)
-                            .clipShape(Capsule())
-                        } else if !sessionQuestions.isEmpty {
-                            HStack(spacing: 4) {
-                                Image(systemName: "questionmark.circle.fill")
-                                    .font(.system(size: 9))
-                                Text("待回答")
+                            if !isExpanded {
+                                Text(session.currentRequest?.prompt ?? "等待指令")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(Theme.textSecondary)
+                                    .lineLimit(1)
+                            } else if !session.cwd.isEmpty {
+                                Text(session.cwd)
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundColor(Theme.textMuted)
+                                    .lineLimit(1)
                             }
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(Theme.info)
-                            .clipShape(Capsule())
                         }
+
+                        Spacer()
                     }
-                    if !isExpanded {
-                        Text(session.currentRequest?.prompt ?? "等待指令")
-                            .font(.system(size: 11))
-                            .foregroundColor(Theme.textSecondary)
-                            .lineLimit(1)
-                    } else if !session.cwd.isEmpty {
-                        Text(session.cwd)
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundColor(Theme.textMuted)
-                            .lineLimit(1)
-                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
-
-                Spacer()
+                .buttonStyle(.plain)
 
                 let usage = tokenService.usage(for: session.id)
                 if usage.total > 0 {
@@ -566,17 +575,6 @@ struct IslandView: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                    if expandedSessionIds.contains(session.id) {
-                        expandedSessionIds.remove(session.id)
-                    } else {
-                        expandedSessionIds.removeAll()
-                        expandedSessionIds.insert(session.id)
-                    }
-                }
-            }
 
             // 折叠时的预览信息
             if !isExpanded {
@@ -1693,7 +1691,10 @@ struct IslandView: View {
 
     // MARK: - 内嵌权限卡片
     private func inlinePermissionCard(_ permission: PermissionRequest) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        // 检测是否来自 Codex 会话
+        let isCodex = monitor.sessions.first(where: { $0.id == permission.sessionId })?.source == .codex
+
+        return VStack(alignment: .leading, spacing: 10) {
             // 标题行
             HStack(spacing: 8) {
                 Image(systemName: permission.icon)
@@ -1705,7 +1706,7 @@ struct IslandView: View {
 
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
-                        Text("权限申请")
+                        Text(isCodex ? "Codex 请求执行" : "权限申请")
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundColor(Theme.warning)
                         Text(permission.tool)
@@ -1751,41 +1752,103 @@ struct IslandView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
 
-            // 操作按钮
-            HStack(spacing: 10) {
-                Button(action: { onDeny(permission.id) }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 10, weight: .bold))
-                        Text("拒绝")
+            // 操作按钮 - Codex 和 Claude Code 使用不同样式
+            if isCodex {
+                // Codex 风格选项
+                VStack(spacing: 8) {
+                    Button(action: { onApprove(permission.id) }) {
+                        HStack {
+                            Text("1.")
+                                .foregroundColor(Theme.textMuted)
+                            Text("Yes, proceed")
+                                .foregroundColor(.white)
+                            Spacer()
+                            Text("y")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundColor(Theme.textMuted)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Theme.bgTertiary)
+                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                        }
+                        .font(.system(size: 12, weight: .medium))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(Theme.success.opacity(0.2))
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(Theme.success.opacity(0.4), lineWidth: 1)
+                        )
                     }
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(Theme.error)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                }
-                .buttonStyle(.plain)
-                .bouncyButton()
+                    .buttonStyle(.plain)
+                    .bouncyButton()
 
-                Button(action: { onApprove(permission.id) }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 10, weight: .bold))
-                        Text("批准")
+                    Button(action: { onDeny(permission.id) }) {
+                        HStack {
+                            Text("2.")
+                                .foregroundColor(Theme.textMuted)
+                            Text("No, tell Codex what to do differently")
+                                .foregroundColor(.white)
+                            Spacer()
+                            Text("esc")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundColor(Theme.textMuted)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Theme.bgTertiary)
+                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                        }
+                        .font(.system(size: 12, weight: .medium))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(Theme.bgTertiary.opacity(0.5))
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(Theme.textMuted.opacity(0.2), lineWidth: 1)
+                        )
                     }
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(Theme.success)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .buttonStyle(.plain)
+                    .bouncyButton()
                 }
-                .buttonStyle(.plain)
-                .bouncyButton()
+            } else {
+                // Claude Code 风格按钮
+                HStack(spacing: 10) {
+                    Button(action: { onDeny(permission.id) }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 10, weight: .bold))
+                            Text("拒绝")
+                        }
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(Theme.error)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .bouncyButton()
 
-                Spacer()
+                    Button(action: { onApprove(permission.id) }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 10, weight: .bold))
+                            Text("批准")
+                        }
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(Theme.success)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .bouncyButton()
+
+                    Spacer()
+                }
             }
         }
         .padding(14)

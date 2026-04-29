@@ -229,8 +229,7 @@ struct HeaderView: View {
 
     var body: some View {
         HStack {
-            Image(systemName: "cpu")
-                .foregroundColor(.white)
+            PulseIconView(size: 24)
             Text("AgentPulse")
                 .font(.headline)
                 .foregroundColor(.white)

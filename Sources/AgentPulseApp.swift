@@ -89,7 +89,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             SessionMonitor.shared.autoCleanup()
         }
 
-        Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+        Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
             self?.codexWatcher?.poll()
         }
 
@@ -107,6 +107,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if self.settings.islandPlaySound {
                 NSSound(named: "Glass")?.play()
             }
+        }
+
+        // 连接会话中断事件到灵动岛通知
+        SessionMonitor.shared.onSessionInterrupted = { [weak self] session, reason in
+            guard let self = self, self.settings.notifyOnComplete else { return }
+            let name = session.cwd.isEmpty ? String(session.id.prefix(8)) : (session.cwd as NSString).lastPathComponent
+            let prompt = session.currentRequest?.prompt ?? ""
+            self.islandState.showInterruption(sessionId: session.id, sessionName: name, prompt: prompt, reason: reason)
+            if self.settings.islandPlaySound {
+                NSSound(named: "Basso")?.play()  // 中断用不同的声音
+            }
+        }
+
+        // 检查会话是否有待处理的权限/问题请求（等待审批不算中断）
+        SessionMonitor.shared.hasPendingRequestForSession = { [weak self] sessionId in
+            guard let self = self else { return false }
+            let hasPermission = self.socketServer.pendingPermissions.contains { $0.sessionId == sessionId }
+            let hasQuestion = self.socketServer.pendingQuestions.contains { $0.sessionId == sessionId }
+            return hasPermission || hasQuestion
         }
 
         // 启动 JSONL 文件监听
@@ -215,8 +234,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let askCount = socketServer.pendingQuestions.count
         let attentionKey = "\(permCount)-\(askCount)-\(socketServer.pendingPermissions.first?.id ?? "")-\(socketServer.pendingQuestions.first?.id ?? "")"
 
+        // 只在有新的审批/问题时自动展开一次
         if permCount > 0 || askCount > 0 {
-            if lastAttentionKey != attentionKey {
+            if lastAttentionKey != attentionKey && settings.islandAutoExpand {
+                // 新的审批/问题，自动展开
                 if let permission = socketServer.pendingPermissions.first {
                     islandState.showPermission(id: permission.id)
                 } else if let question = socketServer.pendingQuestions.first {
@@ -232,16 +253,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if settings.islandPlaySound && lastAttentionKey != attentionKey {
                 NSSound.beep()
             }
-        } else if !islandState.isHovered {
-            islandState.showOverview(expanded: false)
         }
+        // 移除强制收起逻辑，让用户控制
 
         lastAttentionKey = attentionKey
     }
 
     private func configureIslandWindow() {
         islandWindow = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 180, height: 16),
+            contentRect: NSRect(x: 0, y: 0, width: 280, height: 50),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -339,7 +359,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 计算当前模式
         let currentMode: String
-        if hasNotification && !islandState.isHovered {
+        if hasNotification {
             currentMode = "notification"
         } else if shouldExpand {
             currentMode = "expanded"
@@ -363,10 +383,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             case "expanded":
                 // 动态高度：最小400，最大屏幕高度的70%
                 let maxHeight = min(screen.visibleFrame.height * 0.7, 700)
-                size = NSSize(width: 520, height: maxHeight)
+                size = NSSize(width: 580, height: maxHeight)
                 y = screen.frame.maxY - size.height - 4
             default:
-                size = NSSize(width: 180, height: 28)
+                size = NSSize(width: 280, height: 50)
                 y = screen.frame.maxY - size.height
             }
 
@@ -375,11 +395,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             // 使用 NSAnimationContext 实现平滑窗口动画
             let shouldAnimate = previousMode != nil  // 首次显示不动画
+
+            // 收起时稍微延迟窗口动画，让内容先开始淡出
+            let isCollapsing = currentMode == "collapsed" && previousMode != nil
+            let delay: TimeInterval = isCollapsing ? 0.08 : 0
+
             if shouldAnimate {
-                NSAnimationContext.runAnimationGroup { context in
-                    context.duration = 0.25
-                    context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                    islandWindow.animator().setFrame(newFrame, display: true)
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                    guard let islandWindow = self?.islandWindow else { return }
+                    NSAnimationContext.runAnimationGroup { context in
+                        // 与 SwiftUI spring 动画同步
+                        context.duration = isCollapsing ? 0.28 : 0.35
+                        context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                        islandWindow.animator().setFrame(newFrame, display: true)
+                    }
                 }
             } else {
                 islandWindow.setFrame(newFrame, display: true, animate: false)

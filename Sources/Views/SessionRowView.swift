@@ -81,8 +81,6 @@ private struct SessionRowCard: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .background(rowHighlightColor)
-            .contentShape(Rectangle())
-            .onTapGesture(perform: onSelect)
             .contextMenu {
                 Button(action: onJump) {
                     Label("跳转终端", systemImage: "terminal")
@@ -110,19 +108,31 @@ private struct SessionRowCard: View {
 
     private var rowLayout: some View {
         HStack(spacing: 10) {
-            StatusDotView(sessionState: sessionState, isCompleted: isCompleted, hasPending: hasPending)
-            TitleMetaView(
-                sessionId: sessionId,
-                sourceLabel: sourceLabel,
-                folderName: folderName,
-                sessionState: sessionState,
-                pendingPermissionCount: pendingPermissionCount
-            )
-            Spacer()
-            taskArea
-            TimeTextView(formattedTime: formattedTime, relativeTime: relativeTime)
+            Button(action: onSelect) {
+                HStack(spacing: 10) {
+                    StatusDotView(sessionState: sessionState, isCompleted: isCompleted, hasPending: hasPending)
+                    TitleMetaView(
+                        sessionId: sessionId,
+                        sourceLabel: sourceLabel,
+                        folderName: folderName,
+                        sessionState: sessionState,
+                        pendingPermissionCount: pendingPermissionCount
+                    )
+                    Spacer()
+                    taskArea
+                    TimeTextView(formattedTime: formattedTime, relativeTime: relativeTime)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
             jumpArea
-            ChevronView(isExpanded: isExpanded)
+            Button(action: onSelect) {
+                ChevronView(isExpanded: isExpanded)
+                    .frame(width: 18, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
         }
     }
 

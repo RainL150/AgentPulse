@@ -20,9 +20,23 @@ class SessionMonitor: ObservableObject {
     /// 会话完成时的回调（收到 summary）
     var onSessionCompleted: ((Session, String) -> Void)?
 
+    /// 会话被中断时的通知回调
+    var onSessionInterrupted: ((Session, String) -> Void)?
+
+    /// 检查会话是否有待处理的权限/问题请求（用于区分中断和等待审批）
+    var hasPendingRequestForSession: ((String) -> Bool)?
+
     /// 已通知的完成记录（用于去重）
     private var notifiedCompletions: [String: Date] = [:]  // key: sessionId+summaryHash
     private let notificationDedupeWindow: TimeInterval = 60  // 60秒内相同通知只发一次
+
+    /// 应用启动时间（用于过滤旧记录的通知）
+    private let appLaunchTime = Date()
+    /// 启动后多少秒内的旧记录不触发通知（给启动留缓冲）
+    private let launchGracePeriod: TimeInterval = 5
+
+    /// 待检查的中断通知（延迟发送，等待可能的 summary）
+    private var pendingInterruptionChecks: [String: DispatchWorkItem] = [:]
 
     private init() {}
 
@@ -57,6 +71,9 @@ class SessionMonitor: ObservableObject {
                 let request = UserRequest(prompt: prompt, time: record.timestamp)
                 session.requests.append(request)
                 session.state = .running
+                // 清空旧任务计划，新请求从头开始
+                session.tasks.removeAll()
+                taskIdMapping[session.id] = nil
             }
 
         case "tool":
@@ -97,16 +114,38 @@ class SessionMonitor: ObservableObject {
             // AI 生成的总结
             if let summaryText = record.summary,
                let summary = Summary(raw: summaryText) {
+                // 取消待处理的中断检查（收到 summary 说明是正常完成）
+                pendingInterruptionChecks[record.sessionId]?.cancel()
+                pendingInterruptionChecks.removeValue(forKey: record.sessionId)
+
+                var summaryChanged = false
+
                 // 匹配到对应的请求
                 if let promptPrefix = record.prompt?.prefix(100) {
                     for request in session.requests.reversed() {
                         if request.prompt.hasPrefix(String(promptPrefix)) {
-                            request.summary = summary
+                            if request.summary?.result != summary.result || request.summary?.flow != summary.flow {
+                                request.summary = summary
+                                summaryChanged = true
+                            }
                             break
                         }
                     }
                 } else {
-                    session.currentRequest?.summary = summary
+                    if session.currentRequest?.summary?.result != summary.result ||
+                        session.currentRequest?.summary?.flow != summary.flow {
+                        session.currentRequest?.summary = summary
+                        summaryChanged = true
+                    }
+                }
+
+                guard summaryChanged else { break }
+                // 跳过启动期间加载的旧记录（不触发通知）
+                let timeSinceLaunch = Date().timeIntervalSince(appLaunchTime)
+                let timeSinceRecord = Date().timeIntervalSince(record.timestamp)
+                if timeSinceLaunch < launchGracePeriod && timeSinceRecord > launchGracePeriod {
+                    // 启动后5秒内，如果记录本身也是5秒前的，跳过通知
+                    break
                 }
                 // 通知会话完成（带去重）
                 let completionKey = "\(record.sessionId)-\(summary.result.hashValue)"
@@ -119,10 +158,33 @@ class SessionMonitor: ObservableObject {
             }
 
         case "stop":
-            // 会话主动中断
+            // 会话停止（可能是完成、中断或等待审批）
+            let wasRunning = session.state == .running
+            let hasSummary = session.currentRequest?.summary != nil
             session.state = .stopped
             // 通知清除该会话的待处理请求
             onSessionStopped?(record.sessionId)
+            // 如果之前正在运行且没有 summary，延迟检查是否是中断
+            // 注意：等待审批/提问时不算中断，由 SocketServer 判断
+            if wasRunning && !hasSummary {
+                let sessionId = record.sessionId
+                pendingInterruptionChecks[sessionId]?.cancel()
+                let workItem = DispatchWorkItem { [weak self] in
+                    guard let self = self else { return }
+                    self.pendingInterruptionChecks.removeValue(forKey: sessionId)
+                    // 再次检查是否有 summary（可能在延迟期间收到）
+                    if let session = self.sessionMap[sessionId],
+                       session.currentRequest?.summary == nil {
+                        // 检查是否有待处理的权限请求或问题（等待审批不算中断）
+                        let hasPendingRequest = self.hasPendingRequestForSession?(sessionId) ?? false
+                        if !hasPendingRequest {
+                            self.onSessionInterrupted?(session, "会话已中断")
+                        }
+                    }
+                }
+                pendingInterruptionChecks[sessionId] = workItem
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: workItem)
+            }
 
         default:
             break

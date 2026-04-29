@@ -5,6 +5,8 @@ final class CodexWatcher {
     private let sessionsRoot: String
     private let monitor: SessionMonitor
     private let recentWindow: TimeInterval = 60 * 60 * 12
+    private let minimumPollInterval: TimeInterval = 10
+    private var lastPollAt: Date = .distantPast
 
     private var processedPromptKeys: Set<String> = []
     private var processedCallIds: Set<String> = []
@@ -12,6 +14,8 @@ final class CodexWatcher {
     private var sessionCwds: [String: String] = [:]
     private var sessionFiles: [String: String] = [:]
     private var fileLineOffsets: [String: Int] = [:]
+    private var fileModifiedAt: [String: Date] = [:]
+    private var historyModifiedAt: Date = .distantPast
 
     init(
         monitor: SessionMonitor,
@@ -28,6 +32,10 @@ final class CodexWatcher {
     }
 
     func poll() {
+        let now = Date()
+        guard now.timeIntervalSince(lastPollAt) >= minimumPollInterval else { return }
+        lastPollAt = now
+
         discoverSessionFiles()
         loadHistory()
         processSessionFiles()
@@ -73,6 +81,10 @@ final class CodexWatcher {
             if fileLineOffsets[path] == nil {
                 fileLineOffsets[path] = 0
             }
+            if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+               let modifiedAt = attrs[.modificationDate] as? Date {
+                fileModifiedAt[path] = modifiedAt
+            }
             return
         }
     }
@@ -84,6 +96,13 @@ final class CodexWatcher {
     }
 
     private func processSessionFile(sessionId: String, path: String) {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let modifiedAt = attrs[.modificationDate] as? Date else { return }
+
+        if fileModifiedAt[path] == modifiedAt, (fileLineOffsets[path] ?? 0) > 0 {
+            return
+        }
+
         guard let data = FileManager.default.contents(atPath: path),
               let content = String(data: data, encoding: .utf8) else { return }
 
@@ -95,6 +114,7 @@ final class CodexWatcher {
         }
 
         fileLineOffsets[path] = lines.count
+        fileModifiedAt[path] = modifiedAt
     }
 
     private func parseSessionLine(sessionId: String, line: String) {
@@ -184,6 +204,13 @@ final class CodexWatcher {
     }
 
     private func loadHistory() {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: historyPath),
+              let modifiedAt = attrs[.modificationDate] as? Date else { return }
+
+        if historyModifiedAt == modifiedAt {
+            return
+        }
+
         guard let data = FileManager.default.contents(atPath: historyPath),
               let content = String(data: data, encoding: .utf8) else { return }
 
@@ -206,6 +233,8 @@ final class CodexWatcher {
             let cwd = sessionCwds[sessionId] ?? ""
             monitor.addExternalPrompt(sessionId: sessionId, source: .codex, prompt: prompt, time: time, cwd: cwd)
         }
+
+        historyModifiedAt = modifiedAt
     }
 
     private func mapFunctionToolName(_ name: String, arguments: [String: Any] = [:]) -> String {
