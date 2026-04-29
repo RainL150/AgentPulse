@@ -154,6 +154,8 @@ private struct SessionRowCard: View {
         if hasPending { return Color.orange.opacity(0.1) }
         switch sessionState {
         case .running: return Color.green.opacity(0.05)
+        case .waiting: return Color.orange.opacity(0.08)
+        case .completed: return Color.blue.opacity(0.05)
         case .idle: return Color.yellow.opacity(0.03)
         case .stopped, .expired: return .clear
         }
@@ -182,9 +184,11 @@ private struct StatusDotView: View {
         }
         switch sessionState {
         case .running: return .green
+        case .waiting: return .orange
+        case .completed: return .blue
+        case .stopped: return .red              // 被打断 - 红色
         case .idle: return .yellow
-        case .stopped: return Color(white: 0.5)
-        case .expired: return Color(white: 0.3)
+        case .expired: return Color(white: 0.7) // 过期 - 浅灰
         }
     }
 
@@ -192,6 +196,8 @@ private struct StatusDotView: View {
         if hasPending || isCompleted { return nil }
         switch sessionState {
         case .running: return nil
+        case .waiting: return "questionmark"
+        case .completed: return "checkmark"
         case .idle: return "pause.fill"
         case .stopped: return "stop.fill"
         case .expired: return "xmark"
@@ -230,9 +236,11 @@ private struct TitleMetaView: View {
     var stateColor: Color {
         switch sessionState {
         case .running: return .green
+        case .waiting: return .orange
+        case .completed: return .blue
+        case .stopped: return .red              // 被打断 - 红色
         case .idle: return .yellow
-        case .stopped: return Color(white: 0.5)
-        case .expired: return Color(white: 0.4)
+        case .expired: return Color(white: 0.7) // 过期 - 浅灰
         }
     }
 

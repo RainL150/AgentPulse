@@ -32,10 +32,16 @@ struct IslandView: View {
     }
 
     private var prioritizedSessions: [Session] {
-        let sessions = monitor.sessions.sorted { $0.lastUpdate > $1.lastUpdate }
-        let active = sessions.filter(\.isActive)
-        let source = active.isEmpty ? sessions : active
-        return Array(source.prefix(6))
+        // 混合模式：显示所有最近更新的会话，活跃的排在前面
+        let sessions = monitor.sessions.sorted { s1, s2 in
+            // 先按活跃状态排序（running 优先）
+            if s1.isActive != s2.isActive {
+                return s1.isActive
+            }
+            // 再按最后更新时间排序
+            return s1.lastUpdate > s2.lastUpdate
+        }
+        return Array(sessions.prefix(6))
     }
 
     private var selectedSession: Session? {
@@ -336,11 +342,13 @@ struct IslandView: View {
         .contentShape(Rectangle())
         .onTapGesture {
             let sessionId = notification.sessionId
-            overlayState.dismissCompletion()
+            // 先设置状态，防止 dismissCompletion 收起面板
+            overlayState.isPinnedExpanded = true
             expandedSessionIds.removeAll()
             expandedSessionIds.insert(sessionId)
             overlayState.selectedSessionId = sessionId
-            overlayState.setNotificationHovered(true)
+            // 最后关闭通知（不会收起面板，因为 isPinnedExpanded=true）
+            overlayState.dismissCompletion()
         }
     }
 
@@ -446,12 +454,13 @@ struct IslandView: View {
 
         let dotColor: Color = {
             if hasAttention { return Theme.warning }
-            if hasSummary { return Theme.secondary }
             switch session.state {
             case .running: return Theme.success
-            case .idle: return Color(hex: "EAB308")
-            case .stopped: return Theme.textMuted
-            case .expired: return Theme.textMuted.opacity(0.5)
+            case .waiting: return Theme.warning
+            case .completed: return Theme.secondary  // blue
+            case .stopped: return Theme.error        // red - 被打断
+            case .idle: return Color(hex: "EAB308") // yellow
+            case .expired: return Color(white: 0.7) // lightGray - 过期
             }
         }()
 
@@ -1650,9 +1659,11 @@ struct IslandView: View {
     private func stateColor(_ state: SessionState) -> Color {
         switch state {
         case .running: return .green
+        case .waiting: return .orange
+        case .completed: return .blue
+        case .stopped: return .red              // 被打断 - 红色
         case .idle: return .yellow
-        case .stopped: return Color(white: 0.5)
-        case .expired: return Color(white: 0.3)
+        case .expired: return Color(white: 0.7) // 过期 - 浅灰
         }
     }
 

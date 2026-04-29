@@ -65,6 +65,15 @@ final class CodexWatcher {
         guard let data = FileManager.default.contents(atPath: path),
               let content = String(data: data, encoding: .utf8) else { return }
 
+        // 用文件修改时间作为备选时间戳
+        let fileModTime: Date? = {
+            if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+               let modDate = attrs[.modificationDate] as? Date {
+                return modDate
+            }
+            return nil
+        }()
+
         let lines = content.split(separator: "\n", omittingEmptySubsequences: true)
         for line in lines.prefix(12) {
             guard let data = String(line).data(using: .utf8),
@@ -74,9 +83,16 @@ final class CodexWatcher {
                   let sessionId = payload["id"] as? String else { continue }
 
             let cwd = payload["cwd"] as? String ?? ""
-            let timestamp = parseISO8601(payload["timestamp"] as? String) ?? Date()
+            // 使用记录中的时间戳，否则使用文件修改时间
+            guard let timestamp = parseISO8601(payload["timestamp"] as? String) ?? fileModTime else {
+                // 如果都没有有效时间，跳过（不要用当前时间污染）
+                sessionFiles[sessionId] = path
+                sessionCwds[sessionId] = cwd
+                return
+            }
             sessionFiles[sessionId] = path
             sessionCwds[sessionId] = cwd
+            // 只在会话不存在时才创建，避免每次 poll 都更新已有会话
             monitor.upsertExternalSession(id: sessionId, source: .codex, cwd: cwd, timestamp: timestamp)
             if fileLineOffsets[path] == nil {
                 fileLineOffsets[path] = 0
@@ -122,7 +138,8 @@ final class CodexWatcher {
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let type = json["type"] as? String else { return }
 
-        let timestamp = parseISO8601(json["timestamp"] as? String) ?? Date()
+        // 必须有有效时间戳才处理，避免使用当前时间污染 lastUpdate
+        guard let timestamp = parseISO8601(json["timestamp"] as? String) else { return }
         let cwd = sessionCwds[sessionId] ?? ""
 
         switch type {

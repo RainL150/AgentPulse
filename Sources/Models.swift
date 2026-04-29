@@ -18,19 +18,23 @@ enum SessionAgent: String {
 
 enum SessionState: String {
     case running    // 正在执行（有 prompt/tool 事件）
-    case idle       // 空闲等待（超时无活动，但没有 stop）
-    case stopped    // 主动中断（收到 stop 事件）
-    case expired    // 已过期（超过保留时间，待清理）
+    case waiting    // 待审批/提问（等待用户响应）
+    case completed  // 正常完成
+    case stopped    // 被打断（用户 Ctrl+C 等）
+    case idle       // 空闲（超过5分钟无活动）
+    case expired    // 已过期（超过2小时）
 
     var isActive: Bool {
-        self == .running
+        self == .running || self == .waiting
     }
 
     var icon: String {
         switch self {
         case .running: return "circle.fill"
-        case .idle: return "pause.circle.fill"
+        case .waiting: return "questionmark.circle.fill"
+        case .completed: return "checkmark.circle.fill"
         case .stopped: return "stop.circle.fill"
+        case .idle: return "pause.circle.fill"
         case .expired: return "xmark.circle.fill"
         }
     }
@@ -38,17 +42,21 @@ enum SessionState: String {
     var color: String {
         switch self {
         case .running: return "green"
+        case .waiting: return "orange"
+        case .completed: return "blue"
+        case .stopped: return "red"       // 被打断 - 红色警告
         case .idle: return "yellow"
-        case .stopped: return "gray"
-        case .expired: return "red"
+        case .expired: return "lightGray" // 过期 - 浅灰
         }
     }
 
     var label: String {
         switch self {
         case .running: return "运行中"
+        case .waiting: return "待审批"
+        case .completed: return "完成"
+        case .stopped: return "已中断"
         case .idle: return "空闲"
-        case .stopped: return "已停止"
         case .expired: return "已过期"
         }
     }
@@ -506,6 +514,8 @@ struct LogRecord {
     let prompt: String?
     let summary: String?
     let cwd: String?
+    let stopReason: String?  // stop_reason: end_turn, max_tokens, tool_use, interrupted, etc.
+    let output: String?      // Claude's final output text
 
     init?(json: [String: Any]) {
         guard let ts = json["timestamp"] as? String,
@@ -525,5 +535,7 @@ struct LogRecord {
         self.prompt = json["prompt"] as? String
         self.summary = json["summary"] as? String
         self.cwd = json["cwd"] as? String
+        self.stopReason = json["stop_reason"] as? String
+        self.output = json["output"] as? String
     }
 }

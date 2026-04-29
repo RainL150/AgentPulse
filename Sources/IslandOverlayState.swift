@@ -162,9 +162,10 @@ final class IslandOverlayState: ObservableObject {
     }
 
     private func completionKey(sessionId: String, prompt: String, summary: String) -> String {
+        // 使用 hash 避免特殊字符导致的键冲突
         let normalizedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedSummary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
-        return "\(sessionId)|\(normalizedPrompt)|\(normalizedSummary)"
+        return "\(sessionId):\(normalizedPrompt.hashValue):\(normalizedSummary.hashValue)"
     }
 
     private func cleanupRecentNotifications(before cutoff: Date) {

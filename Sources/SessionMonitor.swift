@@ -38,6 +38,9 @@ class SessionMonitor: ObservableObject {
     /// 待检查的中断通知（延迟发送，等待可能的 summary）
     private var pendingInterruptionChecks: [String: DispatchWorkItem] = [:]
 
+    /// 等待 summary 的超时时间（generate-summary.js 最多需要 15 秒）
+    private let summaryWaitTimeout: TimeInterval = 18
+
     private init() {}
 
     // MARK: - Persistence
@@ -80,6 +83,9 @@ class SessionMonitor: ObservableObject {
             // 工具调用
             if record.event == "PostToolUse",
                let tool = record.tool {
+                // 有工具调用说明正在运行
+                session.state = .running
+
                 // 计算上一个工具的耗时
                 if let currentRequest = session.currentRequest,
                    !currentRequest.tools.isEmpty {
@@ -114,9 +120,8 @@ class SessionMonitor: ObservableObject {
             // AI 生成的总结
             if let summaryText = record.summary,
                let summary = Summary(raw: summaryText) {
-                // 取消待处理的中断检查（收到 summary 说明是正常完成）
-                pendingInterruptionChecks[record.sessionId]?.cancel()
-                pendingInterruptionChecks.removeValue(forKey: record.sessionId)
+                // 有 summary 说明任务正常完成
+                session.state = .completed
 
                 var summaryChanged = false
 
@@ -158,33 +163,19 @@ class SessionMonitor: ObservableObject {
             }
 
         case "stop":
-            // 会话停止（可能是完成、中断或等待审批）
-            let wasRunning = session.state == .running
-            let hasSummary = session.currentRequest?.summary != nil
-            session.state = .stopped
+            // 会话停止 - Claude Code 不传递 stop_reason，默认为完成
+            let hasPendingRequest = hasPendingRequestForSession?(record.sessionId) ?? false
+
+            if hasPendingRequest {
+                // 有待处理的权限/问题请求
+                session.state = .waiting
+            } else {
+                // 默认为正常完成
+                session.state = .completed
+            }
+
             // 通知清除该会话的待处理请求
             onSessionStopped?(record.sessionId)
-            // 如果之前正在运行且没有 summary，延迟检查是否是中断
-            // 注意：等待审批/提问时不算中断，由 SocketServer 判断
-            if wasRunning && !hasSummary {
-                let sessionId = record.sessionId
-                pendingInterruptionChecks[sessionId]?.cancel()
-                let workItem = DispatchWorkItem { [weak self] in
-                    guard let self = self else { return }
-                    self.pendingInterruptionChecks.removeValue(forKey: sessionId)
-                    // 再次检查是否有 summary（可能在延迟期间收到）
-                    if let session = self.sessionMap[sessionId],
-                       session.currentRequest?.summary == nil {
-                        // 检查是否有待处理的权限请求或问题（等待审批不算中断）
-                        let hasPendingRequest = self.hasPendingRequestForSession?(sessionId) ?? false
-                        if !hasPendingRequest {
-                            self.onSessionInterrupted?(session, "会话已中断")
-                        }
-                    }
-                }
-                pendingInterruptionChecks[sessionId] = workItem
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: workItem)
-            }
 
         default:
             break
@@ -195,13 +186,20 @@ class SessionMonitor: ObservableObject {
     }
 
     func upsertExternalSession(id: String, source: SessionAgent, cwd: String, timestamp: Date) {
+        let isNew = sessionMap[id] == nil
         let session = getOrCreateSession(id: id)
         session.source = source
-        session.lastUpdate = max(session.lastUpdate, timestamp)
+        // 只在新会话或 timestamp 更新时才更新 lastUpdate
+        if isNew {
+            session.lastUpdate = timestamp
+        }
         if !cwd.isEmpty {
             session.cwd = cwd
         }
-        session.state = stateForExternalActivity(session.lastUpdate)
+        // 已有 summary 的会话保持 stopped 状态
+        if session.currentRequest?.summary == nil {
+            session.state = stateForExternalActivity(session.lastUpdate)
+        }
         updateActiveCount()
         objectWillChange.send()
     }
@@ -269,7 +267,8 @@ class SessionMonitor: ObservableObject {
             session.requests.append(UserRequest(prompt: source == .codex ? "Codex 会话" : "外部会话", time: time))
         }
         session.requests[session.requests.count - 1].summary = Summary(raw: summaryText)
-        session.state = stateForExternalActivity(session.lastUpdate)
+        // 有 summary 说明已完成
+        session.state = .completed
         updateActiveCount()
         objectWillChange.send()
     }
@@ -387,12 +386,17 @@ class SessionMonitor: ObservableObject {
         var changed = false
 
         for session in sessions {
-            // 已经是 stopped 的会话不自动改变状态（用户主动中断）
-            if session.state == .stopped {
+            let timeSinceUpdate = now.timeIntervalSince(session.lastUpdate)
+
+            // completed/stopped/waiting 状态只检查是否过期，不恢复为 running/idle
+            if session.state == .completed || session.state == .stopped || session.state == .waiting {
+                if timeSinceUpdate >= expiredTimeout {
+                    session.state = .expired
+                    changed = true
+                }
                 continue
             }
 
-            let timeSinceUpdate = now.timeIntervalSince(session.lastUpdate)
             let newState: SessionState
             if timeSinceUpdate < idleTimeout {
                 newState = .running
