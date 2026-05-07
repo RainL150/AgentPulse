@@ -1,6 +1,7 @@
 # AgentPulse
 
 macOS 菜单栏应用，实时监控 Claude Code 执行状态。
+<img width="560" height="600" alt="image" src="https://github.com/user-attachments/assets/6c72d82f-1b80-4926-9c80-ccb544be29b0" />
 
 ## 功能
 
