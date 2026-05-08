@@ -1,6 +1,7 @@
 # AgentPulse
 
-macOS 菜单栏应用，实时监控 Claude Code 执行状态。
+macOS 灵动岛风格应用，实时监控 Claude Code / Codex 执行状态。
+
 <img width="560" height="600" alt="image" src="https://github.com/user-attachments/assets/6c72d82f-1b80-4926-9c80-ccb544be29b0" />
 
 <img width="560" height="389" alt="image" src="https://github.com/user-attachments/assets/9cb7ae88-379c-45d4-adf1-d7f5021982e6" />
@@ -9,28 +10,44 @@ macOS 菜单栏应用，实时监控 Claude Code 执行状态。
 
 ## 功能
 
-- **实时监控** - 菜单栏显示活跃会话数，点击展开详情
-- **会话管理** - 查看多个 Claude Code 会话的状态
-- **执行流水** - 可视化工具调用链
+- **灵动岛 UI** - 悬浮窗口，悬停展开，自动收起
+- **双引擎支持** - 同时监控 Claude Code 和 Codex 会话
+- **实时状态** - 6 态系统：运行中(绿)、待审批(橙)、完成(蓝)、中断(红)、空闲(黄)、过期(灰)
+- **权限审批** - 灵动岛内直接批准/拒绝工具请求
+- **问题回复** - 直接回答 AskUserQuestion 提问
+- **执行流水** - 可视化工具调用链，支持展开/折叠
 - **任务计划** - 显示 TaskCreate/TaskUpdate 创建的任务列表
-- **AI 总结** - 展示结构化的流程+结果总结
+- **完成通知** - 会话完成时弹出通知，显示 AI 总结
 - **终端跳转** - 一键跳转到对应 iTerm2/Terminal 标签页
-- **权限通知** - 工具请求权限时弹出系统通知（规划中）
+- **会话持久化** - 重启后恢复会话状态
+
+## 会话状态
+
+| 状态 | 颜色 | 说明 |
+|------|------|------|
+| running | 🟢 绿色 | 正在执行 |
+| waiting | 🟠 橙色 | 待审批/提问 |
+| completed | 🔵 蓝色 | 正常完成 |
+| stopped | 🔴 红色 | 被打断 |
+| idle | 🟡 黄色 | 空闲 (5分钟无活动) |
+| expired | ⚪ 浅灰 | 过期 (2小时) |
 
 ## 架构
 
 ```
-Claude Code (hooks)
-    │
-    ├─ log-tools.sh ──────→ ~/.claude/tool-flow-logs/calls.jsonl
-    ├─ generate-summary.js ─→ AI 生成执行总结
-    └─ permission-bridge.js ─→ /tmp/agent-pulse.sock
-                                    │
-                                    ▼
-                            Swift 菜单栏 App
-                            ├─ JSONLWatcher (FSEvents)
-                            ├─ SocketServer (Unix Socket)
-                            └─ TerminalJumper (AppleScript)
+Claude Code (hooks)              Codex (~/.codex/)
+    │                                │
+    ├─ log-tools.sh ────────┐       │
+    ├─ generate-summary.js ─┤       │
+    └─ interaction-bridge.js┤       │
+                            │       │
+                            ▼       ▼
+                      Swift 灵动岛 App
+                      ├─ JSONLWatcher (FSEvents)
+                      ├─ CodexWatcher (Polling)
+                      ├─ SocketServer (Unix Socket)
+                      ├─ SessionMonitor (状态管理)
+                      └─ TerminalJumper (AppleScript)
 ```
 
 ## 构建
@@ -74,7 +91,10 @@ open /Applications/AgentPulse.app
       { "type": "command", "command": "node /Users/YOU/.claude/hooks/generate-summary.js" }
     ],
     "PermissionRequest": [
-      { "type": "command", "command": "node /Users/YOU/.claude/hooks/permission-bridge.js" }
+      { "type": "command", "command": "node /Users/YOU/.claude/hooks/interaction-bridge.js" }
+    ],
+    "PreToolUse[AskUserQuestion]": [
+      { "type": "command", "command": "node /Users/YOU/.claude/hooks/interaction-bridge.js" }
     ]
   }
 }
@@ -88,22 +108,25 @@ AgentPulse/
 ├── build.sh                   # 构建脚本
 ├── Sources/
 │   ├── AgentPulseApp.swift    # 应用入口
-│   ├── Models.swift           # 数据模型
+│   ├── Models.swift           # 数据模型 (Session, ToolCall, Task...)
 │   ├── SessionMonitor.swift   # 状态管理
+│   ├── IslandOverlayState.swift # 灵动岛状态
 │   ├── Info.plist             # App 配置
 │   ├── Views/
-│   │   ├── MonitorView.swift      # 主面板
-│   │   └── SessionRowView.swift   # 会话详情
+│   │   ├── IslandView.swift       # 灵动岛主视图
+│   │   ├── MonitorView.swift      # 传统面板
+│   │   └── SessionRowView.swift   # 会话行组件
 │   └── Services/
-│       ├── JSONLWatcher.swift     # 日志监听
-│       ├── SocketServer.swift     # Socket 服务
+│       ├── JSONLWatcher.swift     # Claude Code 日志监听
+│       ├── CodexWatcher.swift     # Codex 会话监听
+│       ├── SocketServer.swift     # Unix Socket 服务
+│       ├── SessionPersistence.swift # 会话持久化
 │       └── TerminalJumper.swift   # 终端跳转
 ```
 
 ## TODO
 
-- [ ] 权限审批交互（Approve/Deny 按钮）
-- [ ] AskUserQuestion 直接回复
-- [ ] 多 Agent 并行监控
-- [ ] 历史记录持久化
+- [ ] 中断状态检测优化 (Claude Code 不传递 stop_reason)
+- [ ] Token 用量统计
 - [ ] 快捷键支持
+- [ ] 多显示器支持
