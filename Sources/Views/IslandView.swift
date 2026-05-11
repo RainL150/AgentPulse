@@ -1677,6 +1677,7 @@ struct IslandView: View {
         case "TaskCreate", "TaskUpdate": return .pink
         case "Task": return .indigo
         case "Skill": return .yellow
+        case "Message": return .white.opacity(0.7)
         default: return .white.opacity(0.7)
         }
     }
@@ -1696,6 +1697,7 @@ struct IslandView: View {
         case "WebSearch": return "search"
         case "WebFetch": return "fetch"
         case "Task": return "task"
+        case "Message": return "msg"
         default: return tool.tool.lowercased().prefix(6).description
         }
     }

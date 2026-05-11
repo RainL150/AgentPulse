@@ -146,6 +146,7 @@ struct ToolCall: Identifiable {
         case "TaskCreate": return "plus.circle"
         case "TaskUpdate": return "checkmark.circle"
         case "Git": return "arrow.triangle.branch"
+        case "Message": return "text.bubble"
         default: return "wrench"
         }
     }
@@ -166,6 +167,9 @@ struct ToolCall: Identifiable {
         }
         if let subagentType = input["subagent_type"] as? String {
             return "[\(subagentType)]"
+        }
+        if let message = input["message"] as? String {
+            return String(message.prefix(40))
         }
         // Codex apply_patch
         if input["patch"] != nil {
@@ -236,6 +240,10 @@ struct ToolCall: Identifiable {
             if let taskId = input["taskId"] as? String,
                let status = input["status"] as? String {
                 return "#\(taskId) → \(status)"
+            }
+        case "Message":
+            if let message = input["message"] as? String {
+                return message
             }
         case "AskUserQuestion":
             // 提取并显示问题内容
@@ -354,6 +362,7 @@ struct PermissionRequest: Identifiable {
         case "WebSearch": return "globe"
         case "WebFetch": return "arrow.down.doc"
         case "AskUserQuestion": return "questionmark.bubble.fill"
+        case "Message": return "text.bubble"
         default: return "wrench"
         }
     }
@@ -400,6 +409,10 @@ struct PermissionRequest: Identifiable {
                 return question
             }
             return "等待用户回答"
+        case "Message":
+            if let message = input["message"] as? String {
+                return message
+            }
         default:
             break
         }
@@ -463,6 +476,10 @@ struct PermissionRequest: Identifiable {
                let options = firstQ["options"] as? [[String: Any]] {
                 let labels = options.compactMap { $0["label"] as? String }
                 return "选项: " + labels.joined(separator: " | ")
+            }
+        case "Message":
+            if let phase = input["phase"] as? String, !phase.isEmpty {
+                return phase
             }
         default:
             break

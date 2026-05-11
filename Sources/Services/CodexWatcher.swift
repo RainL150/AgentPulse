@@ -11,6 +11,7 @@ final class CodexWatcher {
     private var processedPromptKeys: Set<String> = []
     private var processedCallIds: Set<String> = []
     private var processedSummaryKeys: Set<String> = []
+    private var processedMessageKeys: Set<String> = []
     private var sessionCwds: [String: String] = [:]
     private var sessionFiles: [String: String] = [:]
     private var fileLineOffsets: [String: Int] = [:]
@@ -186,6 +187,9 @@ final class CodexWatcher {
             let toolCall = ToolCall(tool: mapCustomToolName(name), input: input, time: timestamp)
             monitor.addExternalToolCall(sessionId: sessionId, source: .codex, toolCall: toolCall, time: timestamp, cwd: cwd)
 
+        case "function_call_output", "custom_tool_call_output":
+            monitor.markExternalActivity(sessionId: sessionId, source: .codex, time: timestamp, cwd: cwd)
+
         default:
             break
         }
@@ -195,6 +199,9 @@ final class CodexWatcher {
         guard let type = payload["type"] as? String else { return }
 
         switch type {
+        case "task_started", "token_count":
+            monitor.markExternalActivity(sessionId: sessionId, source: .codex, time: timestamp, cwd: cwd)
+
         case "user_message":
             guard let prompt = payload["message"] as? String else { return }
             let key = "\(sessionId)-\(Int(timestamp.timeIntervalSince1970))-\(prompt.hashValue)"
@@ -208,12 +215,23 @@ final class CodexWatcher {
             monitor.setExternalSummary(sessionId: sessionId, source: .codex, summaryText: text, time: timestamp, cwd: cwd)
 
         case "agent_message":
-            guard let phase = payload["phase"] as? String,
-                  phase == "final_answer",
-                  let text = payload["message"] as? String else { return }
-            let key = "\(sessionId)-final-\(text.hashValue)"
-            guard processedSummaryKeys.insert(key).inserted else { return }
-            monitor.setExternalSummary(sessionId: sessionId, source: .codex, summaryText: text, time: timestamp, cwd: cwd)
+            guard let text = payload["message"] as? String, !text.isEmpty else { return }
+            let phase = payload["phase"] as? String ?? ""
+
+            if phase == "final_answer" {
+                let key = "\(sessionId)-final-\(text.hashValue)"
+                guard processedSummaryKeys.insert(key).inserted else { return }
+                monitor.setExternalSummary(sessionId: sessionId, source: .codex, summaryText: text, time: timestamp, cwd: cwd)
+            } else {
+                let key = "\(sessionId)-message-\(Int(timestamp.timeIntervalSince1970 * 1000))-\(text.hashValue)"
+                guard processedMessageKeys.insert(key).inserted else { return }
+                let toolCall = ToolCall(
+                    tool: "Message",
+                    input: ["message": text, "phase": phase],
+                    time: timestamp
+                )
+                monitor.addExternalToolCall(sessionId: sessionId, source: .codex, toolCall: toolCall, time: timestamp, cwd: cwd)
+            }
 
         default:
             break

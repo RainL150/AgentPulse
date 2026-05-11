@@ -11,6 +11,8 @@ class SessionMonitor: ObservableObject {
 
     /// 会话变为 idle 的超时时间（秒）
     private let idleTimeout: TimeInterval = 300 // 5分钟无活动变为 idle
+    /// Codex 的本地 session JSONL 写入更稀疏，状态保活窗口需要更长。
+    private let codexIdleTimeout: TimeInterval = 1800 // 30分钟无活动变为 idle
     /// 会话变为 expired 的超时时间（秒）
     private let expiredTimeout: TimeInterval = 7200 // 2小时后过期
 
@@ -196,9 +198,9 @@ class SessionMonitor: ObservableObject {
         if !cwd.isEmpty {
             session.cwd = cwd
         }
-        // 已有 summary 的会话保持 stopped 状态
+        // 已有 summary 的会话保持完成态，避免历史文件扫描把它重新拉回 running。
         if session.currentRequest?.summary == nil {
-            session.state = stateForExternalActivity(session.lastUpdate)
+            session.state = stateForExternalActivity(session.lastUpdate, source: source)
         }
         updateActiveCount()
         objectWillChange.send()
@@ -216,6 +218,20 @@ class SessionMonitor: ObservableObject {
             session.requests.append(request)
         }
         session.state = .running  // 有新 prompt 说明正在运行
+        updateActiveCount()
+        objectWillChange.send()
+    }
+
+    func markExternalActivity(sessionId: String, source: SessionAgent, time: Date, cwd: String) {
+        let session = getOrCreateSession(id: sessionId)
+        session.source = source
+        session.lastUpdate = max(session.lastUpdate, time)
+        if !cwd.isEmpty {
+            session.cwd = cwd
+        }
+        if session.currentRequest?.summary == nil && session.state != .stopped {
+            session.state = .running
+        }
         updateActiveCount()
         objectWillChange.send()
     }
@@ -274,15 +290,20 @@ class SessionMonitor: ObservableObject {
     }
 
     /// 根据时间判断外部会话的状态
-    private func stateForExternalActivity(_ date: Date) -> SessionState {
+    private func stateForExternalActivity(_ date: Date, source: SessionAgent) -> SessionState {
         let elapsed = Date().timeIntervalSince(date)
-        if elapsed < idleTimeout {
+        let timeout = idleTimeout(for: source)
+        if elapsed < timeout {
             return .running
         } else if elapsed < expiredTimeout {
             return .idle
         } else {
             return .expired
         }
+    }
+
+    private func idleTimeout(for source: SessionAgent) -> TimeInterval {
+        source == .codex ? codexIdleTimeout : idleTimeout
     }
 
     private func taskStatus(from value: String) -> TaskStatus {
@@ -358,7 +379,7 @@ class SessionMonitor: ObservableObject {
         if let mapping = taskIdMapping[session.id] {
             mappedIndices = Set(mapping.values)
         }
-        for (idx, task) in session.tasks.enumerated() {
+        for idx in session.tasks.indices {
             if !mappedIndices.contains(idx) {
                 // 建立映射并更新
                 taskIdMapping[session.id]?[taskIdStr] = idx
@@ -398,7 +419,7 @@ class SessionMonitor: ObservableObject {
             }
 
             let newState: SessionState
-            if timeSinceUpdate < idleTimeout {
+            if timeSinceUpdate < idleTimeout(for: session.source) {
                 newState = .running
             } else if timeSinceUpdate < expiredTimeout {
                 newState = .idle

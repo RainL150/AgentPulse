@@ -611,6 +611,7 @@ struct ToolFlowView: View {
         case "Grep", "Glob": return .purple
         case "WebSearch", "WebFetch": return .cyan
         case "TaskCreate", "TaskUpdate": return .pink
+        case "Message": return .secondary
         default: return .secondary
         }
     }
@@ -635,6 +636,7 @@ struct ToolFlowView: View {
         case "Task": return "task"
         case "TaskCreate": return "task+"
         case "TaskUpdate": return "task✓"
+        case "Message": return "msg"
         default: return tool.tool.lowercased()
         }
     }

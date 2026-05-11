@@ -279,6 +279,7 @@ struct ToolIcon: View {
         case "TaskCreate": return "plus.circle"
         case "TaskUpdate": return "checkmark.circle"
         case "AskUserQuestion": return "questionmark.bubble"
+        case "Message": return "text.bubble"
         default: return "wrench"
         }
     }
@@ -294,6 +295,7 @@ struct ToolIcon: View {
         case "Task": return Theme.primary
         case "Skill": return Color(hex: "EAB308")
         case "AskUserQuestion": return Theme.info
+        case "Message": return Theme.textSecondary
         default: return Theme.textSecondary
         }
     }
