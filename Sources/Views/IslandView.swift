@@ -920,25 +920,7 @@ struct IslandView: View {
         let isEventExpanded = expandedToolFlowIds.contains(sessionId)
 
         return VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                ZStack {
-                    Circle()
-                        .fill(Theme.bgTertiary)
-                        .frame(width: 24, height: 24)
-                    Image(systemName: "arrow.right.circle.fill")
-                        .font(.system(size: 12))
-                        .foregroundColor(Theme.textSecondary)
-                }
-                Text("工作流")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(Theme.textSecondary)
-                Spacer()
-                TagBadge(text: "\(events.count) 事件", color: Theme.textMuted, style: .subtle)
-                Image(systemName: isEventExpanded ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(Theme.textMuted)
-            }
-
+            // 展开的内容在上方（向上展开）
             if isEventExpanded {
                 ScrollView(.vertical, showsIndicators: true) {
                     VStack(alignment: .leading, spacing: 6) {
@@ -977,7 +959,29 @@ struct IslandView: View {
                     }
                 }
                 .frame(maxHeight: 220)
-            } else {
+            }
+
+            // 折叠按钮在下方
+            HStack(spacing: 8) {
+                ZStack {
+                    Circle()
+                        .fill(Theme.bgTertiary)
+                        .frame(width: 24, height: 24)
+                    Image(systemName: "arrow.right.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundColor(Theme.textSecondary)
+                }
+                Text("工作流")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(Theme.textSecondary)
+                Spacer()
+                TagBadge(text: "\(events.count) 事件", color: Theme.textMuted, style: .subtle)
+                Image(systemName: isEventExpanded ? "chevron.down" : "chevron.up")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(Theme.textMuted)
+            }
+
+            if !isEventExpanded {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         if events.count > 7 {
@@ -1039,28 +1043,7 @@ struct IslandView: View {
         let isToolExpanded = expandedToolFlowIds.contains(sessionId)
 
         return VStack(alignment: .leading, spacing: 10) {
-            // 标题行
-            HStack(spacing: 8) {
-                ZStack {
-                    Circle()
-                        .fill(Theme.bgTertiary)
-                        .frame(width: 24, height: 24)
-                    Image(systemName: "arrow.right.circle.fill")
-                        .font(.system(size: 12))
-                        .foregroundColor(Theme.textSecondary)
-                }
-                Text("执行流")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(Theme.textSecondary)
-                Spacer()
-                TagBadge(text: "\(tools.count) 操作", color: Theme.textMuted, style: .subtle)
-                Image(systemName: isToolExpanded ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(Theme.textMuted)
-                    .rotationEffect(.degrees(isToolExpanded ? 0 : 0))
-                    .animation(.spring(response: 0.3), value: isToolExpanded)
-            }
-
+            // 展开的内容在上方（向上展开）
             if isToolExpanded {
                 // 展开显示详细列表（时间正序：旧的在上，新的在下）
                 ScrollViewReader { proxy in
@@ -1129,7 +1112,29 @@ struct IslandView: View {
                         }
                     }
                 }
-            } else {
+            }
+
+            // 标题行在下方（点击展开/折叠）
+            HStack(spacing: 8) {
+                ZStack {
+                    Circle()
+                        .fill(Theme.bgTertiary)
+                        .frame(width: 24, height: 24)
+                    Image(systemName: "arrow.right.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundColor(Theme.textSecondary)
+                }
+                Text("执行流")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(Theme.textSecondary)
+                Spacer()
+                TagBadge(text: "\(tools.count) 操作", color: Theme.textMuted, style: .subtle)
+                Image(systemName: isToolExpanded ? "chevron.down" : "chevron.up")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(Theme.textMuted)
+            }
+
+            if !isToolExpanded {
                 // 折叠显示图标流（时间正序：旧的在左，新的在右）
                 ScrollViewReader { proxy in
                     ScrollView(.horizontal, showsIndicators: false) {
