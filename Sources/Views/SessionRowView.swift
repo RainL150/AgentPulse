@@ -515,8 +515,11 @@ struct RequestBlockView: View {
             .background(Color.blue.opacity(0.08))
             .cornerRadius(8)
 
-            // 工具执行流
-            if !request.tools.isEmpty {
+            // 工作流事件
+            let flowEvents = request.events.filter { $0.isVisibleInFlow && $0.type != .userMessage }
+            if !flowEvents.isEmpty {
+                WorkflowEventFlowView(events: flowEvents)
+            } else if !request.tools.isEmpty {
                 ToolFlowView(tools: request.tools)
             }
 
@@ -525,6 +528,149 @@ struct RequestBlockView: View {
                 SummaryView(summary: summary)
             }
         }
+    }
+}
+
+struct WorkflowEventFlowView: View {
+    let events: [WorkflowEvent]
+    @State private var isExpanded: Bool = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Image(systemName: "arrow.right.circle")
+                    .foregroundColor(.secondary)
+                Text("工作流")
+                    .foregroundColor(.secondary)
+                Spacer()
+                Text("\(events.count) 事件")
+                    .foregroundColor(.secondary)
+                Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                    .foregroundColor(.secondary)
+                    .font(.system(size: 9))
+            }
+            .font(.system(size: 10, weight: .medium))
+            .contentShape(Rectangle())
+            .onTapGesture {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isExpanded.toggle()
+                }
+            }
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(events.suffix(24)) { event in
+                        WorkflowEventDetailRow(event: event)
+                    }
+                    if events.count > 24 {
+                        Text("... 还有 \(events.count - 24) 个事件")
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
+                    }
+                }
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 4) {
+                        ForEach(Array(events.suffix(10).enumerated()), id: \.element.id) { index, event in
+                            if index > 0 {
+                                Image(systemName: "arrow.right")
+                                    .font(.system(size: 8))
+                                    .foregroundColor(.secondary.opacity(0.5))
+                            }
+                            VStack(spacing: 2) {
+                                Image(systemName: event.icon)
+                                    .font(.system(size: 14))
+                                    .foregroundColor(eventColor(event))
+                                    .frame(width: 24, height: 24)
+                                    .background(eventColor(event).opacity(0.1))
+                                    .cornerRadius(4)
+                                Text(String(event.shortLabel.prefix(10)))
+                                    .font(.system(size: 8))
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
+                        if events.count > 10 {
+                            Text("...")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.08))
+        .cornerRadius(6)
+    }
+
+    private func eventColor(_ event: WorkflowEvent) -> Color {
+        switch event.type {
+        case .assistantMessage: return .secondary
+        case .toolCall: return event.status == .failed ? .red : .green
+        case .toolResult: return .green
+        case .planUpdate: return .orange
+        case .permissionRequest: return .orange
+        case .question: return .blue
+        case .summary: return .purple
+        case .error: return .red
+        case .userMessage: return .blue
+        case .heartbeat: return .gray
+        }
+    }
+}
+
+struct WorkflowEventDetailRow: View {
+    let event: WorkflowEvent
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: event.icon)
+                .font(.system(size: 10))
+                .foregroundColor(eventColor)
+                .frame(width: 14)
+
+            Text(event.title)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(eventColor)
+                .frame(width: 62, alignment: .leading)
+                .lineLimit(1)
+
+            Text(event.detail.isEmpty ? event.shortLabel : event.detail)
+                .font(.system(size: 10))
+                .foregroundColor(.primary.opacity(0.8))
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Spacer()
+
+            Text(formatTime(event.time))
+                .font(.system(size: 9))
+                .foregroundColor(.secondary)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var eventColor: Color {
+        switch event.type {
+        case .assistantMessage: return .secondary
+        case .toolCall: return event.status == .failed ? .red : .green
+        case .toolResult: return .green
+        case .planUpdate: return .orange
+        case .permissionRequest: return .orange
+        case .question: return .blue
+        case .summary: return .purple
+        case .error: return .red
+        case .userMessage: return .blue
+        case .heartbeat: return .gray
+        }
+    }
+
+    private func formatTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter.string(from: date)
     }
 }
 

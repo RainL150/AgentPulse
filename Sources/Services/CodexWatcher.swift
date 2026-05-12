@@ -84,8 +84,9 @@ final class CodexWatcher {
                   let sessionId = payload["id"] as? String else { continue }
 
             let cwd = payload["cwd"] as? String ?? ""
-            // 使用记录中的时间戳，否则使用文件修改时间
-            guard let timestamp = parseISO8601(payload["timestamp"] as? String) ?? fileModTime else {
+            // 使用文件修改时间作为会话活跃时间（更准确反映最近活动）
+            // session_meta 时间戳只用于没有文件修改时间的情况
+            guard let timestamp = fileModTime ?? parseISO8601(payload["timestamp"] as? String) else {
                 // 如果都没有有效时间，跳过（不要用当前时间污染）
                 sessionFiles[sessionId] = path
                 sessionCwds[sessionId] = cwd
@@ -93,7 +94,6 @@ final class CodexWatcher {
             }
             sessionFiles[sessionId] = path
             sessionCwds[sessionId] = cwd
-            // 只在会话不存在时才创建，避免每次 poll 都更新已有会话
             monitor.upsertExternalSession(id: sessionId, source: .codex, cwd: cwd, timestamp: timestamp)
             if fileLineOffsets[path] == nil {
                 fileLineOffsets[path] = 0
@@ -171,13 +171,16 @@ final class CodexWatcher {
                   processedCallIds.insert(callId).inserted,
                   let name = payload["name"] as? String else { return }
             let arguments = parseJSONStringDictionary(payload["arguments"] as? String)
+
+            // update_plan 只更新任务列表，不作为工具调用显示
+            if name == "update_plan", let plan = arguments["plan"] as? [[String: String]] {
+                monitor.updateExternalTasks(sessionId: sessionId, source: .codex, plan: plan, time: timestamp, cwd: cwd)
+                return
+            }
+
             let toolName = mapFunctionToolName(name, arguments: arguments)
             let toolCall = ToolCall(tool: toolName, input: arguments, time: timestamp)
             monitor.addExternalToolCall(sessionId: sessionId, source: .codex, toolCall: toolCall, time: timestamp, cwd: cwd)
-
-            if name == "update_plan", let plan = arguments["plan"] as? [[String: String]] {
-                monitor.updateExternalTasks(sessionId: sessionId, source: .codex, plan: plan, time: timestamp, cwd: cwd)
-            }
 
         case "custom_tool_call":
             guard let callId = payload["call_id"] as? String,
@@ -186,6 +189,21 @@ final class CodexWatcher {
             let input = mapCustomToolInput(name: name, rawInput: payload["input"])
             let toolCall = ToolCall(tool: mapCustomToolName(name), input: input, time: timestamp)
             monitor.addExternalToolCall(sessionId: sessionId, source: .codex, toolCall: toolCall, time: timestamp, cwd: cwd)
+
+        case "web_search_call":
+            // Web 搜索调用
+            if let action = payload["action"] as? [String: Any],
+               let actionType = action["type"] as? String {
+                let key = "\(sessionId)-websearch-\(Int(timestamp.timeIntervalSince1970 * 1000))"
+                guard processedCallIds.insert(key).inserted else { return }
+
+                var input: [String: Any] = ["action": actionType]
+                if let query = action["query"] as? String {
+                    input["query"] = query
+                }
+                let toolCall = ToolCall(tool: "WebSearch", input: input, time: timestamp)
+                monitor.addExternalToolCall(sessionId: sessionId, source: .codex, toolCall: toolCall, time: timestamp, cwd: cwd)
+            }
 
         case "function_call_output", "custom_tool_call_output":
             monitor.markExternalActivity(sessionId: sessionId, source: .codex, time: timestamp, cwd: cwd)
@@ -201,6 +219,19 @@ final class CodexWatcher {
         switch type {
         case "task_started", "token_count":
             monitor.markExternalActivity(sessionId: sessionId, source: .codex, time: timestamp, cwd: cwd)
+
+        case "patch_apply_end":
+            // Patch 应用完成 - 文件编辑
+            if let path = payload["path"] as? String {
+                let key = "\(sessionId)-patch-\(Int(timestamp.timeIntervalSince1970 * 1000))-\(path.hashValue)"
+                guard processedCallIds.insert(key).inserted else { return }
+                let toolCall = ToolCall(
+                    tool: "Edit",
+                    input: ["file_path": path, "patch_applied": true],
+                    time: timestamp
+                )
+                monitor.addExternalToolCall(sessionId: sessionId, source: .codex, toolCall: toolCall, time: timestamp, cwd: cwd)
+            }
 
         case "user_message":
             guard let prompt = payload["message"] as? String else { return }

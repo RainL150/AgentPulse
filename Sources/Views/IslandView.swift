@@ -644,6 +644,19 @@ struct IslandView: View {
                                     .foregroundColor(Theme.success)
                                     .lineLimit(1)
                             }
+                        } else if let event = session.currentRequest?.events.last(where: { $0.isVisibleInFlow && $0.type != .userMessage }) {
+                            HStack(spacing: 8) {
+                                Image(systemName: event.icon)
+                                    .font(.system(size: 11))
+                                    .foregroundColor(workflowEventColor(event))
+                                    .frame(width: 20, height: 20)
+                                    .background(workflowEventColor(event).opacity(0.14))
+                                    .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                                Text(event.detail.isEmpty ? event.title : event.detail)
+                                    .font(.system(size: 11))
+                                    .foregroundColor(Theme.textSecondary)
+                                    .lineLimit(1)
+                            }
                         } else if let tool = session.currentRequest?.tools.last {
                             HStack(spacing: 8) {
                                 ToolIcon(tool: tool.tool, size: 20)
@@ -679,7 +692,9 @@ struct IslandView: View {
                         simpleRequestCard(request.prompt)
                     }
                     // 执行流
-                    if let tools = session.currentRequest?.tools, !tools.isEmpty {
+                    if let events = session.currentRequest?.events.filter({ $0.isVisibleInFlow && $0.type != .userMessage }), !events.isEmpty {
+                        inlineWorkflowFlow(sessionId: session.id, events: events)
+                    } else if let tools = session.currentRequest?.tools, !tools.isEmpty {
                         inlineToolFlow(sessionId: session.id, tools: tools)
                     }
                     // AI 总结
@@ -901,6 +916,125 @@ struct IslandView: View {
         )
     }
 
+    private func inlineWorkflowFlow(sessionId: String, events: [WorkflowEvent]) -> some View {
+        let isEventExpanded = expandedToolFlowIds.contains(sessionId)
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                ZStack {
+                    Circle()
+                        .fill(Theme.bgTertiary)
+                        .frame(width: 24, height: 24)
+                    Image(systemName: "arrow.right.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundColor(Theme.textSecondary)
+                }
+                Text("工作流")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(Theme.textSecondary)
+                Spacer()
+                TagBadge(text: "\(events.count) 事件", color: Theme.textMuted, style: .subtle)
+                Image(systemName: isEventExpanded ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(Theme.textMuted)
+            }
+
+            if isEventExpanded {
+                ScrollView(.vertical, showsIndicators: true) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if events.count > 18 {
+                            HStack(spacing: 6) {
+                                Image(systemName: "ellipsis")
+                                    .font(.system(size: 10))
+                                Text("还有 \(events.count - 18) 个旧事件")
+                                    .font(.system(size: 10))
+                            }
+                            .foregroundColor(Theme.textMuted)
+                            .padding(.vertical, 4)
+                        }
+                        ForEach(events.suffix(18)) { event in
+                            HStack(spacing: 10) {
+                                Image(systemName: event.icon)
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundColor(workflowEventColor(event))
+                                    .frame(width: 24, height: 24)
+                                    .background(workflowEventColor(event).opacity(0.15))
+                                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(event.title)
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundColor(event.status == .failed ? Theme.error : Theme.textPrimary)
+                                    Text(event.detail.isEmpty ? event.shortLabel : event.detail)
+                                        .font(.system(size: 10))
+                                        .foregroundColor(Theme.textSecondary)
+                                        .lineLimit(1)
+                                }
+                                Spacer()
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                }
+                .frame(maxHeight: 220)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        if events.count > 7 {
+                            HStack(spacing: 4) {
+                                Text("...\(events.count - 7)")
+                                    .font(.system(size: 9, weight: .medium))
+                                    .foregroundColor(Theme.textMuted)
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 8))
+                                    .foregroundColor(Theme.textMuted.opacity(0.5))
+                            }
+                        }
+                        ForEach(Array(events.suffix(7).enumerated()), id: \.element.id) { index, event in
+                            if index > 0 {
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 8))
+                                    .foregroundColor(Theme.textMuted.opacity(0.5))
+                            }
+                            VStack(spacing: 4) {
+                                Image(systemName: event.icon)
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundColor(workflowEventColor(event))
+                                    .frame(width: 28, height: 28)
+                                    .background(workflowEventColor(event).opacity(0.15))
+                                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                                Text(event.shortLabel)
+                                    .font(.system(size: 9, weight: .medium))
+                                    .foregroundColor(Theme.textSecondary)
+                                    .lineLimit(1)
+                                    .frame(maxWidth: 70)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Theme.bgTertiary.opacity(0.5))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Theme.textMuted.opacity(0.1), lineWidth: 1)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                if expandedToolFlowIds.contains(sessionId) {
+                    expandedToolFlowIds.remove(sessionId)
+                } else {
+                    expandedToolFlowIds.insert(sessionId)
+                }
+            }
+        }
+    }
+
     private func inlineToolFlow(sessionId: String, tools: [ToolCall]) -> some View {
         let isToolExpanded = expandedToolFlowIds.contains(sessionId)
 
@@ -1070,6 +1204,60 @@ struct IslandView: View {
         }
     }
 
+    private func compactWorkflowFlow(_ events: [WorkflowEvent]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "arrow.right.circle")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.6))
+                Text("工作流")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.6))
+                Spacer()
+                Text("\(events.count) 事件")
+                    .font(.system(size: 10))
+                    .foregroundColor(.white.opacity(0.4))
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    if events.count > 8 {
+                        Text("...\(events.count - 8)")
+                            .font(.system(size: 10))
+                            .foregroundColor(.white.opacity(0.4))
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 9))
+                            .foregroundColor(.white.opacity(0.3))
+                    }
+                    ForEach(Array(events.suffix(8).enumerated()), id: \.element.id) { index, event in
+                        if index > 0 {
+                            Image(systemName: "arrow.right")
+                                .font(.system(size: 9))
+                                .foregroundColor(.white.opacity(0.3))
+                        }
+                        VStack(spacing: 3) {
+                            Image(systemName: event.icon)
+                                .font(.system(size: 14))
+                                .foregroundColor(workflowEventColor(event))
+                                .frame(width: 28, height: 28)
+                                .background(workflowEventColor(event).opacity(0.15))
+                                .cornerRadius(6)
+                            Text(event.shortLabel)
+                                .font(.system(size: 8))
+                                .foregroundColor(.white.opacity(0.5))
+                                .lineLimit(1)
+                                .frame(width: 50)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
     private func expandedSessionDetail(_ session: Session) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             // 标题行
@@ -1127,7 +1315,9 @@ struct IslandView: View {
             }
 
             // 执行流（图标流样式）
-            if let tools = session.currentRequest?.tools, !tools.isEmpty {
+            if let events = session.currentRequest?.events.filter({ $0.isVisibleInFlow && $0.type != .userMessage }), !events.isEmpty {
+                compactWorkflowFlow(events)
+            } else if let tools = session.currentRequest?.tools, !tools.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Image(systemName: "arrow.right.circle")
@@ -1679,6 +1869,21 @@ struct IslandView: View {
         case "Skill": return .yellow
         case "Message": return .white.opacity(0.7)
         default: return .white.opacity(0.7)
+        }
+    }
+
+    private func workflowEventColor(_ event: WorkflowEvent) -> Color {
+        switch event.type {
+        case .assistantMessage: return Theme.textSecondary
+        case .toolCall: return event.status == .failed ? Theme.error : Theme.success
+        case .toolResult: return Theme.success
+        case .planUpdate: return Theme.warning
+        case .permissionRequest: return Theme.warning
+        case .question: return Theme.info
+        case .summary: return Theme.accent
+        case .error: return Theme.error
+        case .userMessage: return Theme.info
+        case .heartbeat: return Theme.textMuted
         }
     }
 

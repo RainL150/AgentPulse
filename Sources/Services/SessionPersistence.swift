@@ -14,9 +14,19 @@ struct PersistentSession: Codable {
 struct PersistentRequest: Codable {
     let prompt: String
     let time: Date
+    let events: [PersistentWorkflowEvent]?
     let tools: [PersistentToolCall]
     let summaryFlow: String?
     let summaryResult: String?
+}
+
+struct PersistentWorkflowEvent: Codable {
+    let type: String
+    let title: String
+    let detail: String
+    let time: Date
+    let status: String
+    let toolName: String?
 }
 
 struct PersistentToolCall: Codable {
@@ -90,6 +100,16 @@ class SessionPersistence {
         guard session.lastUpdate > cutoff else { return nil }
 
         let requests = session.requests.suffix(10).map { req -> PersistentRequest in
+            let events = req.events.suffix(100).map { event in
+                PersistentWorkflowEvent(
+                    type: event.type.rawValue,
+                    title: event.title,
+                    detail: event.detail,
+                    time: event.time,
+                    status: event.status.rawValue,
+                    toolName: event.toolName
+                )
+            }
             let tools = req.tools.suffix(50).map { tool -> PersistentToolCall in
                 let inputJSON = (try? JSONSerialization.data(withJSONObject: tool.input))
                     .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
@@ -102,6 +122,7 @@ class SessionPersistence {
             return PersistentRequest(
                 prompt: req.prompt,
                 time: req.time,
+                events: Array(events),
                 tools: Array(tools),
                 summaryFlow: req.summary?.flow,
                 summaryResult: req.summary?.result
@@ -134,6 +155,18 @@ class SessionPersistence {
         for req in persistent.requests {
             let userRequest = UserRequest(prompt: req.prompt, time: req.time)
 
+            for event in req.events ?? [] {
+                guard let type = WorkflowEventType(rawValue: event.type) else { continue }
+                userRequest.events.append(WorkflowEvent(
+                    type: type,
+                    title: event.title,
+                    detail: event.detail,
+                    time: event.time,
+                    status: WorkflowEventStatus(rawValue: event.status) ?? .success,
+                    toolName: event.toolName
+                ))
+            }
+
             for tool in req.tools {
                 let input: [String: Any]
                 if let data = tool.input.data(using: .utf8),
@@ -144,6 +177,17 @@ class SessionPersistence {
                 }
                 let toolCall = ToolCall(tool: tool.tool, input: input, time: tool.time)
                 userRequest.tools.append(toolCall)
+                if (req.events ?? []).isEmpty {
+                    let type: WorkflowEventType = tool.tool == "Message" ? .assistantMessage : .toolCall
+                    userRequest.events.append(WorkflowEvent(
+                        type: type,
+                        title: tool.tool == "Message" ? "过程说明" : tool.tool,
+                        detail: toolCall.fullDetail.isEmpty ? toolCall.detail : toolCall.fullDetail,
+                        time: tool.time,
+                        status: .success,
+                        toolName: tool.tool
+                    ))
+                }
             }
 
             if let flow = req.summaryFlow, let result = req.summaryResult {

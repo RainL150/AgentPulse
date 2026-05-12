@@ -90,6 +90,7 @@ class UserRequest: Identifiable, ObservableObject {
     let id = UUID()
     let prompt: String
     let time: Date
+    @Published var events: [WorkflowEvent] = []
     @Published var tools: [ToolCall] = []
     @Published var summary: Summary?
 
@@ -99,12 +100,107 @@ class UserRequest: Identifiable, ObservableObject {
     }
 }
 
+// MARK: - WorkflowEvent
+
+enum WorkflowEventType: String, Codable {
+    case userMessage = "user_message"
+    case assistantMessage = "assistant_message"
+    case toolCall = "tool_call"
+    case toolResult = "tool_result"
+    case planUpdate = "plan_update"
+    case permissionRequest = "permission_request"
+    case question
+    case summary
+    case heartbeat
+    case error
+}
+
+enum WorkflowEventStatus: String, Codable {
+    case pending
+    case running
+    case success
+    case failed
+    case waiting
+    case completed
+    case timeout
+}
+
+struct WorkflowEvent: Identifiable {
+    let id: UUID
+    let type: WorkflowEventType
+    let title: String
+    let detail: String
+    let time: Date
+    var status: WorkflowEventStatus
+    var toolName: String?
+
+    init(
+        id: UUID = UUID(),
+        type: WorkflowEventType,
+        title: String,
+        detail: String = "",
+        time: Date,
+        status: WorkflowEventStatus = .success,
+        toolName: String? = nil
+    ) {
+        self.id = id
+        self.type = type
+        self.title = title
+        self.detail = detail
+        self.time = time
+        self.status = status
+        self.toolName = toolName
+    }
+
+    var isVisibleInFlow: Bool {
+        type != .heartbeat
+    }
+
+    var icon: String {
+        switch type {
+        case .userMessage: return "bubble.left.fill"
+        case .assistantMessage: return "text.bubble"
+        case .toolCall: return ToolCall(tool: toolName ?? title, input: [:], time: time).icon
+        case .toolResult: return "checkmark.circle"
+        case .planUpdate: return "checklist"
+        case .permissionRequest: return "exclamationmark.shield.fill"
+        case .question: return "questionmark.bubble.fill"
+        case .summary: return "sparkles"
+        case .heartbeat: return "waveform.path.ecg"
+        case .error: return "xmark.octagon.fill"
+        }
+    }
+
+    var shortLabel: String {
+        switch type {
+        case .userMessage: return "user"
+        case .assistantMessage: return "msg"
+        case .toolCall: return (toolName ?? title).lowercased()
+        case .toolResult: return "done"
+        case .planUpdate: return "plan"
+        case .permissionRequest: return "auth"
+        case .question: return "ask"
+        case .summary: return "sum"
+        case .heartbeat: return "beat"
+        case .error: return "err"
+        }
+    }
+}
+
 // MARK: - ToolStatus
 
 enum ToolStatus {
     case success
     case failed
     case timeout
+
+    var workflowStatus: WorkflowEventStatus {
+        switch self {
+        case .success: return .success
+        case .failed: return .failed
+        case .timeout: return .timeout
+        }
+    }
 }
 
 // MARK: - ToolCall
@@ -244,6 +340,11 @@ struct ToolCall: Identifiable {
         case "Message":
             if let message = input["message"] as? String {
                 return message
+            }
+        case "Git":
+            // Codex git 命令
+            if let cmd = input["cmd"] as? String ?? input["command"] as? String {
+                return String(cmd.prefix(80))
             }
         case "AskUserQuestion":
             // 提取并显示问题内容

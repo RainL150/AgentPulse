@@ -15,6 +15,8 @@ class SessionMonitor: ObservableObject {
     private let codexIdleTimeout: TimeInterval = 1800 // 30分钟无活动变为 idle
     /// 会话变为 expired 的超时时间（秒）
     private let expiredTimeout: TimeInterval = 7200 // 2小时后过期
+    /// Codex 会话的过期时间更长（与 CodexWatcher.recentWindow 一致）
+    private let codexExpiredTimeout: TimeInterval = 43200 // 12小时后过期
 
     /// 会话被中断时的回调（用于清除待处理的权限/问题请求）
     var onSessionStopped: ((String) -> Void)?
@@ -74,6 +76,13 @@ class SessionMonitor: ObservableObject {
             // 新的用户请求
             if let prompt = record.prompt {
                 let request = UserRequest(prompt: prompt, time: record.timestamp)
+                request.events.append(WorkflowEvent(
+                    type: .userMessage,
+                    title: "用户请求",
+                    detail: prompt,
+                    time: record.timestamp,
+                    status: .success
+                ))
                 session.requests.append(request)
                 session.state = .running
                 // 清空旧任务计划，新请求从头开始
@@ -109,6 +118,19 @@ class SessionMonitor: ObservableObject {
                 }
 
                 session.currentRequest?.tools.append(toolCall)
+                appendEvent(
+                    WorkflowEvent(
+                        type: .toolCall,
+                        title: tool,
+                        detail: toolCall.fullDetail,
+                        time: record.timestamp,
+                        status: toolCall.status.workflowStatus,
+                        toolName: tool
+                    ),
+                    to: session,
+                    fallbackPrompt: "Claude 会话",
+                    time: record.timestamp
+                )
 
                 // 处理任务创建/更新
                 if tool == "TaskCreate", let input = record.input {
@@ -133,6 +155,7 @@ class SessionMonitor: ObservableObject {
                         if request.prompt.hasPrefix(String(promptPrefix)) {
                             if request.summary?.result != summary.result || request.summary?.flow != summary.flow {
                                 request.summary = summary
+                                request.events.append(summaryEvent(summary: summary, time: record.timestamp))
                                 summaryChanged = true
                             }
                             break
@@ -142,6 +165,12 @@ class SessionMonitor: ObservableObject {
                     if session.currentRequest?.summary?.result != summary.result ||
                         session.currentRequest?.summary?.flow != summary.flow {
                         session.currentRequest?.summary = summary
+                        appendEvent(
+                            summaryEvent(summary: summary, time: record.timestamp),
+                            to: session,
+                            fallbackPrompt: "Claude 会话",
+                            time: record.timestamp
+                        )
                         summaryChanged = true
                     }
                 }
@@ -188,13 +217,10 @@ class SessionMonitor: ObservableObject {
     }
 
     func upsertExternalSession(id: String, source: SessionAgent, cwd: String, timestamp: Date) {
-        let isNew = sessionMap[id] == nil
         let session = getOrCreateSession(id: id)
         session.source = source
-        // 只在新会话或 timestamp 更新时才更新 lastUpdate
-        if isNew {
-            session.lastUpdate = timestamp
-        }
+        // 始终使用较新的时间戳（文件修改时间反映最近活动）
+        session.lastUpdate = max(session.lastUpdate, timestamp)
         if !cwd.isEmpty {
             session.cwd = cwd
         }
@@ -215,6 +241,13 @@ class SessionMonitor: ObservableObject {
         }
         if session.currentRequest?.prompt != prompt {
             let request = UserRequest(prompt: prompt, time: time)
+            request.events.append(WorkflowEvent(
+                type: .userMessage,
+                title: "用户请求",
+                detail: prompt,
+                time: time,
+                status: .success
+            ))
             session.requests.append(request)
         }
         session.state = .running  // 有新 prompt 说明正在运行
@@ -236,6 +269,48 @@ class SessionMonitor: ObservableObject {
         objectWillChange.send()
     }
 
+    func addPermissionWorkflowEvent(_ permission: PermissionRequest) {
+        let session = getOrCreateSession(id: permission.sessionId)
+        session.lastUpdate = max(session.lastUpdate, permission.timestamp)
+        appendEvent(
+            WorkflowEvent(
+                type: .permissionRequest,
+                title: "权限申请",
+                detail: "\(permission.tool): \(permission.summary)",
+                time: permission.timestamp,
+                status: .waiting,
+                toolName: permission.tool
+            ),
+            to: session,
+            fallbackPrompt: session.source == .codex ? "Codex 会话" : "Claude 会话",
+            time: permission.timestamp
+        )
+        session.state = .waiting
+        updateActiveCount()
+        objectWillChange.send()
+    }
+
+    func addQuestionWorkflowEvent(_ question: AskRequest) {
+        let session = getOrCreateSession(id: question.sessionId)
+        session.lastUpdate = max(session.lastUpdate, question.timestamp)
+        appendEvent(
+            WorkflowEvent(
+                type: .question,
+                title: "需要回答",
+                detail: question.firstQuestion,
+                time: question.timestamp,
+                status: .waiting,
+                toolName: "AskUserQuestion"
+            ),
+            to: session,
+            fallbackPrompt: session.source == .codex ? "Codex 会话" : "Claude 会话",
+            time: question.timestamp
+        )
+        session.state = .waiting
+        updateActiveCount()
+        objectWillChange.send()
+    }
+
     func addExternalToolCall(sessionId: String, source: SessionAgent, toolCall: ToolCall, time: Date, cwd: String) {
         let session = getOrCreateSession(id: sessionId)
         session.source = source
@@ -247,6 +322,12 @@ class SessionMonitor: ObservableObject {
             session.requests.append(UserRequest(prompt: source == .codex ? "Codex 会话" : "外部会话", time: time))
         }
         session.requests[session.requests.count - 1].tools.append(toolCall)
+        appendEvent(
+            workflowEvent(from: toolCall),
+            to: session,
+            fallbackPrompt: source == .codex ? "Codex 会话" : "外部会话",
+            time: time
+        )
         session.state = .running  // 有工具调用说明正在运行
         updateActiveCount()
         objectWillChange.send()
@@ -267,6 +348,12 @@ class SessionMonitor: ObservableObject {
                 activeForm: nil
             )
         }
+        appendEvent(
+            planUpdateEvent(tasks: session.tasks, time: time),
+            to: session,
+            fallbackPrompt: source == .codex ? "Codex 会话" : "外部会话",
+            time: time
+        )
         session.state = .running  // 有任务更新说明正在运行
         updateActiveCount()
         objectWillChange.send()
@@ -282,7 +369,16 @@ class SessionMonitor: ObservableObject {
         if session.requests.isEmpty {
             session.requests.append(UserRequest(prompt: source == .codex ? "Codex 会话" : "外部会话", time: time))
         }
-        session.requests[session.requests.count - 1].summary = Summary(raw: summaryText)
+        let summary = Summary(raw: summaryText)
+        session.requests[session.requests.count - 1].summary = summary
+        if let summary {
+            appendEvent(
+                summaryEvent(summary: summary, time: time),
+                to: session,
+                fallbackPrompt: source == .codex ? "Codex 会话" : "外部会话",
+                time: time
+            )
+        }
         // 有 summary 说明已完成
         session.state = .completed
         updateActiveCount()
@@ -292,10 +388,11 @@ class SessionMonitor: ObservableObject {
     /// 根据时间判断外部会话的状态
     private func stateForExternalActivity(_ date: Date, source: SessionAgent) -> SessionState {
         let elapsed = Date().timeIntervalSince(date)
-        let timeout = idleTimeout(for: source)
-        if elapsed < timeout {
+        let idle = idleTimeout(for: source)
+        let expired = expiredTimeout(for: source)
+        if elapsed < idle {
             return .running
-        } else if elapsed < expiredTimeout {
+        } else if elapsed < expired {
             return .idle
         } else {
             return .expired
@@ -304,6 +401,10 @@ class SessionMonitor: ObservableObject {
 
     private func idleTimeout(for source: SessionAgent) -> TimeInterval {
         source == .codex ? codexIdleTimeout : idleTimeout
+    }
+
+    private func expiredTimeout(for source: SessionAgent) -> TimeInterval {
+        source == .codex ? codexExpiredTimeout : expiredTimeout
     }
 
     private func taskStatus(from value: String) -> TaskStatus {
@@ -315,6 +416,52 @@ class SessionMonitor: ObservableObject {
         default:
             return .pending
         }
+    }
+
+    private func appendEvent(_ event: WorkflowEvent, to session: Session, fallbackPrompt: String, time: Date) {
+        if session.requests.isEmpty {
+            session.requests.append(UserRequest(prompt: fallbackPrompt, time: time))
+        }
+        session.requests[session.requests.count - 1].events.append(event)
+    }
+
+    private func workflowEvent(from toolCall: ToolCall) -> WorkflowEvent {
+        let type: WorkflowEventType = toolCall.tool == "Message" ? .assistantMessage : .toolCall
+        let title = toolCall.tool == "Message" ? "过程说明" : toolCall.tool
+        let detail = toolCall.fullDetail.isEmpty ? toolCall.detail : toolCall.fullDetail
+        return WorkflowEvent(
+            type: type,
+            title: title,
+            detail: detail,
+            time: toolCall.time,
+            status: toolCall.status.workflowStatus,
+            toolName: toolCall.tool
+        )
+    }
+
+    private func planUpdateEvent(tasks: [Task], time: Date) -> WorkflowEvent {
+        let completed = tasks.filter { $0.status == .completed }.count
+        let active = tasks.first { $0.status == .inProgress }
+        let detail = active?.activeForm ?? active?.subject ?? "\(completed)/\(tasks.count) 完成"
+        return WorkflowEvent(
+            type: .planUpdate,
+            title: "计划更新",
+            detail: detail,
+            time: time,
+            status: completed == tasks.count && !tasks.isEmpty ? .completed : .running,
+            toolName: "TaskUpdate"
+        )
+    }
+
+    private func summaryEvent(summary: Summary, time: Date) -> WorkflowEvent {
+        WorkflowEvent(
+            type: .summary,
+            title: "完成总结",
+            detail: summary.result,
+            time: time,
+            status: .completed,
+            toolName: "Summary"
+        )
     }
 
     private func getOrCreateSession(id: String) -> Session {
@@ -341,6 +488,12 @@ class SessionMonitor: ObservableObject {
             activeForm: input["activeForm"] as? String
         )
         session.tasks.append(task)
+        appendEvent(
+            planUpdateEvent(tasks: session.tasks, time: session.lastUpdate),
+            to: session,
+            fallbackPrompt: "Claude 会话",
+            time: session.lastUpdate
+        )
     }
 
     private func handleTaskUpdate(session: Session, input: [String: Any]) {
@@ -354,6 +507,12 @@ class SessionMonitor: ObservableObject {
             if let subject = input["subject"] as? String {
                 session.tasks[idx].subject = subject
             }
+            appendEvent(
+                planUpdateEvent(tasks: session.tasks, time: session.lastUpdate),
+                to: session,
+                fallbackPrompt: "Claude 会话",
+                time: session.lastUpdate
+            )
             return
         }
 
@@ -366,6 +525,12 @@ class SessionMonitor: ObservableObject {
             if let subject = input["subject"] as? String {
                 session.tasks[idx].subject = subject
             }
+            appendEvent(
+                planUpdateEvent(tasks: session.tasks, time: session.lastUpdate),
+                to: session,
+                fallbackPrompt: "Claude 会话",
+                time: session.lastUpdate
+            )
             return
         }
 
@@ -387,6 +552,12 @@ class SessionMonitor: ObservableObject {
                 if let subject = input["subject"] as? String {
                     session.tasks[idx].subject = subject
                 }
+                appendEvent(
+                    planUpdateEvent(tasks: session.tasks, time: session.lastUpdate),
+                    to: session,
+                    fallbackPrompt: "Claude 会话",
+                    time: session.lastUpdate
+                )
                 return
             }
         }
@@ -408,10 +579,11 @@ class SessionMonitor: ObservableObject {
 
         for session in sessions {
             let timeSinceUpdate = now.timeIntervalSince(session.lastUpdate)
+            let expired = expiredTimeout(for: session.source)
 
             // completed/stopped/waiting 状态只检查是否过期，不恢复为 running/idle
             if session.state == .completed || session.state == .stopped || session.state == .waiting {
-                if timeSinceUpdate >= expiredTimeout {
+                if timeSinceUpdate >= expired {
                     session.state = .expired
                     changed = true
                 }
@@ -421,7 +593,7 @@ class SessionMonitor: ObservableObject {
             let newState: SessionState
             if timeSinceUpdate < idleTimeout(for: session.source) {
                 newState = .running
-            } else if timeSinceUpdate < expiredTimeout {
+            } else if timeSinceUpdate < expired {
                 newState = .idle
             } else {
                 newState = .expired

@@ -128,6 +128,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return hasPermission || hasQuestion
         }
 
+        socketServer.onPermissionRequest = { permission in
+            SessionMonitor.shared.addPermissionWorkflowEvent(permission)
+        }
+
+        socketServer.onAskRequest = { question in
+            SessionMonitor.shared.addQuestionWorkflowEvent(question)
+        }
+
         // 启动 JSONL 文件监听
         let logPath = NSHomeDirectory() + "/.claude/tool-flow-logs/calls.jsonl"
         jsonlWatcher = JSONLWatcher(path: logPath) { record in
